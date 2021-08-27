@@ -63,15 +63,15 @@ var _ = SIGDescribe("Projected downwardAPI", func() {
 	   Release: v1.9
 	   Testname: Projected Volume, DownwardAPI, volume mode 0400
 	   Description: A Pod is created with a projected volume source for downwardAPI with pod name, cpu and memory limits and cpu and memory requests. The default mode for the volume mount is set to 0400. Pod MUST be able to read the pod name from the mounted DownwardAPIVolumeFiles and the volume mode must be -r--------.
-	   This test is marked LinuxOnly since Windows does not support setting specific file permissions.
 	*/
-	framework.ConformanceIt("should set DefaultMode on files [LinuxOnly] [NodeConformance]", func() {
+	framework.ConformanceIt("should set DefaultMode on files [NodeConformance]", func() {
 		podName := "downwardapi-volume-" + string(uuid.NewUUID())
 		defaultMode := int32(0400)
 		pod := projectedDownwardAPIVolumePodForModeTest(podName, "/etc/podinfo/podname", nil, &defaultMode)
 
-		e2epodoutput.TestContainerOutput(f, "downward API volume plugin", pod, 0, []string{
-			"mode of file \"/etc/podinfo/podname\": -r--------",
+		fileModeRegexp := getFileModeRegex("/etc/podinfo/podname", &defaultMode)
+		e2epodoutput.TestContainerOutputRegexp(f, "downward API volume plugin", pod, 0, []string{
+			fileModeRegexp,
 		})
 	})
 
@@ -79,15 +79,15 @@ var _ = SIGDescribe("Projected downwardAPI", func() {
 	   Release: v1.9
 	   Testname: Projected Volume, DownwardAPI, volume mode 0400
 	   Description: A Pod is created with a projected volume source for downwardAPI with pod name, cpu and memory limits and cpu and memory requests. The default mode for the volume mount is set to 0400. Pod MUST be able to read the pod name from the mounted DownwardAPIVolumeFiles and the volume mode must be -r--------.
-	   This test is marked LinuxOnly since Windows does not support setting specific file permissions.
 	*/
-	framework.ConformanceIt("should set mode on item file [LinuxOnly] [NodeConformance]", func() {
+	framework.ConformanceIt("should set mode on item file [NodeConformance]", func() {
 		podName := "downwardapi-volume-" + string(uuid.NewUUID())
 		mode := int32(0400)
 		pod := projectedDownwardAPIVolumePodForModeTest(podName, "/etc/podinfo/podname", &mode, nil)
 
-		e2epodoutput.TestContainerOutput(f, "downward API volume plugin", pod, 0, []string{
-			"mode of file \"/etc/podinfo/podname\": -r--------",
+		fileModeRegexp := getFileModeRegex("/etc/podinfo/podname", &mode)
+		e2epodoutput.TestContainerOutputRegexp(f, "downward API volume plugin", pod, 0, []string{
+			fileModeRegexp,
 		})
 	})
 
@@ -107,7 +107,7 @@ var _ = SIGDescribe("Projected downwardAPI", func() {
 	})
 
 	ginkgo.It("should provide podname as non-root with fsgroup and defaultMode [LinuxOnly] [NodeFeature:FSGroup]", func() {
-		// Windows does not support RunAsUser / FSGroup SecurityContext options, and it does not support setting file permissions.
+		// Windows does not support RunAsUser / FSGroup SecurityContext options.
 		e2eskipper.SkipIfNodeOSDistroIs("windows")
 		podName := "metadata-volume-" + string(uuid.NewUUID())
 		gid := int64(1234)

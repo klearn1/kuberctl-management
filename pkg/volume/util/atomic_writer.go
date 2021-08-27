@@ -368,7 +368,7 @@ func (w *AtomicWriter) newTimestampDir() (string, error) {
 	// 0755 permissions are needed to allow 'group' and 'other' to recurse the
 	// directory tree.  do a chmod here to ensure that permissions are set correctly
 	// regardless of the process' umask.
-	err = os.Chmod(tsDir, 0755)
+	err = Chmod(tsDir, 0755)
 	if err != nil {
 		klog.Errorf("%s: unable to set mode on new temp directory: %v", w.logContext, err)
 		return "", err
@@ -399,7 +399,7 @@ func (w *AtomicWriter) writePayloadToDir(payload map[string]FileProjection, dir 
 		// open(2) to create the file, so the final mode used is "mode &
 		// ~umask". But we want to make sure the specified mode is used
 		// in the file no matter what the umask is.
-		if err := os.Chmod(fullPath, mode); err != nil {
+		if err := Chmod(fullPath, mode); err != nil {
 			klog.Errorf("%s: unable to change file %s with mode %v: %v", w.logContext, fullPath, mode, err)
 			return err
 		}

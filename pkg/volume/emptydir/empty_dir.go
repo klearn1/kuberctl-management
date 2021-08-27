@@ -456,7 +456,7 @@ func (ed *emptyDir) setupDir(dir string) error {
 		// the thread, clearing the umask, creating the dir, restoring
 		// the umask, and unlocking the thread, we do a chmod to set
 		// the specific bits we need.
-		err := os.Chmod(dir, perm)
+		err := volumeutil.Chmod(dir, perm)
 		if err != nil {
 			return err
 		}
@@ -524,6 +524,13 @@ func (ed *emptyDir) teardownDefault(dir string) error {
 	}
 	// Renaming the directory is not required anymore because the operation executor
 	// now handles duplicate operations on the same volume
+
+	// NOTE(claudiub): Apparently, if we don't have write permissions, we can't delete files
+	// with only read permissions set.
+	err = volumeutil.Chmod(dir, 0777)
+	if err != nil {
+		return err
+	}
 	return os.RemoveAll(dir)
 }
 

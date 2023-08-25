@@ -24,6 +24,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -60,9 +61,11 @@ import (
 	clientgotesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
+	metricsutil "k8s.io/component-base/metrics/testutil"
 	"k8s.io/controller-manager/pkg/informerfactory"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	c "k8s.io/kubernetes/pkg/controller"
+	"k8s.io/kubernetes/pkg/controller/garbagecollector/metrics"
 	"k8s.io/kubernetes/test/utils/ktesting"
 )
 
@@ -846,7 +849,6 @@ func TestGarbageCollectorSync(t *testing.T) {
 		PreferredResources: serverResources,
 		Error:              nil,
 		Lock:               sync.Mutex{},
-		InterfaceUsedCount: 0,
 	}
 
 	testHandler := &fakeActionHandler{
@@ -865,7 +867,24 @@ func TestGarbageCollectorSync(t *testing.T) {
 			},
 		},
 	}
-	srv, clientConfig := testServerAndClientConfig(testHandler.ServeHTTP)
+
+	testHandler2 := &fakeActionHandler{
+		response: map[string]FakeResponse{
+			"GET" + "/api/v1/secrets": {
+				200,
+				[]byte("{}"),
+			},
+		},
+	}
+	var secretSyncOK atomic.Bool
+	var alternativeTestHandler = func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v1/secrets" && secretSyncOK.Load() {
+			testHandler2.ServeHTTP(response, request)
+			return
+		}
+		testHandler.ServeHTTP(response, request)
+	}
+	srv, clientConfig := testServerAndClientConfig(alternativeTestHandler)
 	defer srv.Close()
 	clientConfig.ContentConfig.NegotiatedSerializer = nil
 	client, err := kubernetes.NewForConfig(clientConfig)
@@ -885,7 +904,7 @@ func TestGarbageCollectorSync(t *testing.T) {
 
 	sharedInformers := informers.NewSharedInformerFactory(client, 0)
 
-	tCtx := ktesting.Init(t)
+	logger, tCtx := ktesting.NewTestContext(t)
 	defer tCtx.Cancel("test has completed")
 	alwaysStarted := make(chan struct{})
 	close(alwaysStarted)
@@ -917,7 +936,9 @@ func TestGarbageCollectorSync(t *testing.T) {
 
 	// Simulate the discovery client returning an error
 	fakeDiscoveryClient.setPreferredResources(nil, fmt.Errorf("error calling discoveryClient.ServerPreferredResources()"))
+	// Wait until sync discovers the change
 	time.Sleep(1 * time.Second)
+	// No monitor changes
 	assertMonitors(t, gc, "pods", "deployments")
 
 	// Remove the error from being returned and see if the garbage collector sync is still working
@@ -948,23 +969,25 @@ func TestGarbageCollectorSync(t *testing.T) {
 	// Unsyncable monitor removed
 	assertMonitors(t, gc, "pods", "deployments")
 
-	// Add fake controller simulate the initial not-synced informer which will be synced at the end.
-	fc := fakeController{}
-	gc.dependencyGraphBuilder.monitors[schema.GroupVersionResource{
-		Version:  "v1",
-		Resource: "secrets",
-	}] = &monitor{controller: &fc}
-	if gc.IsSynced(logger) {
-		t.Fatal("cache from garbage collector should not be synced")
-	}
-
+	// Simulate initial not-synced informer which will be synced at the end.
+	metrics.GarbageCollectorResourcesSyncError.Reset()
 	fakeDiscoveryClient.setPreferredResources(unsyncableServerResources, nil)
 	time.Sleep(1 * time.Second)
 	assertMonitors(t, gc, "pods", "secrets")
+	if gc.IsSynced(logger) {
+		t.Fatal("cache from garbage collector should not be synced")
+	}
+	val, _ := metricsutil.GetCounterMetricValue(metrics.GarbageCollectorResourcesSyncError)
+	if val < 1 {
+		t.Fatalf("expect sync error metric > 0")
+	}
 
 	// The informer is synced now.
-	fc.SetSynced(true)
-	time.Sleep(1 * time.Second)
+	secretSyncOK.Store(true)
+	// wait the cache run loop run at least once listwatch retry period is
+	// 1 second + (0,1] second jitter. So we need more than 2 seconds,
+	// and *5 it to make it stable under pressure
+	time.Sleep(10 * time.Second)
 	assertMonitors(t, gc, "pods", "secrets")
 
 	if !gc.IsSynced(logger) {
@@ -992,7 +1015,6 @@ type fakeServerResources struct {
 	PreferredResources []*metav1.APIResourceList
 	Error              error
 	Lock               sync.Mutex
-	InterfaceUsedCount int
 }
 
 func (*fakeServerResources) ServerResourcesForGroupVersion(groupVersion string) (*metav1.APIResourceList, error) {
@@ -1006,7 +1028,6 @@ func (*fakeServerResources) ServerGroupsAndResources() ([]*metav1.APIGroup, []*m
 func (f *fakeServerResources) ServerPreferredResources() ([]*metav1.APIResourceList, error) {
 	f.Lock.Lock()
 	defer f.Lock.Unlock()
-	f.InterfaceUsedCount++
 	return f.PreferredResources, f.Error
 }
 
@@ -2752,28 +2773,6 @@ func assertState(s state) step {
 		},
 	}
 
-}
-
-type fakeController struct {
-	synced bool
-	lock   sync.Mutex
-}
-
-func (f *fakeController) Run(stopCh <-chan struct{}) {
-}
-
-func (f *fakeController) HasSynced() bool {
-	return f.synced
-}
-
-func (f *fakeController) SetSynced(synced bool) {
-	f.lock.Lock()
-	defer f.lock.Unlock()
-	f.synced = synced
-}
-
-func (f *fakeController) LastSyncResourceVersion() string {
-	return ""
 }
 
 // trackingWorkqueue implements RateLimitingInterface,

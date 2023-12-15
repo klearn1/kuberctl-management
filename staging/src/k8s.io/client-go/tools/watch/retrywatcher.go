@@ -126,7 +126,7 @@ func (rw *RetryWatcher) doReceive() (bool, time.Duration) {
 			return false, 0
 		}
 
-		klog.ErrorS(err, msg)
+		klog.ErrorS(err, msg, "resourceVersion", rw.lastResourceVersion)
 		// Retry
 		return false, 0
 	}

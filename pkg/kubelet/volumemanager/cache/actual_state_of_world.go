@@ -340,12 +340,6 @@ type mountedPod struct {
 	// /var/lib/kubelet/pods/{podUID}/volumes/{escapeQualifiedPluginName}/{volumeSpecName}/
 	volumeSpec *volume.Spec
 
-	// outerVolumeSpecName is the volume.Spec.Name() of the volume as referenced
-	// directly in the pod. If the volume was referenced through a persistent
-	// volume claim, this contains the volume.Spec.Name() of the persistent
-	// volume claim
-	outerVolumeSpecName string
-
 	// remountRequired indicates the underlying volume has been successfully
 	// mounted to this pod but it should be remounted to reflect changes in the
 	// referencing pod.
@@ -446,7 +440,6 @@ func (asw *actualStateOfWorld) CheckAndMarkVolumeAsUncertainViaReconstruction(op
 	volumeName := opts.VolumeName
 	mounter := opts.Mounter
 	blockVolumeMapper := opts.BlockVolumeMapper
-	outerVolumeSpecName := opts.OuterVolumeSpecName
 	volumeGIDValue := opts.VolumeGIDVolume
 	volumeSpec := opts.VolumeSpec
 
@@ -455,7 +448,6 @@ func (asw *actualStateOfWorld) CheckAndMarkVolumeAsUncertainViaReconstruction(op
 		podUID:                 podUID,
 		mounter:                mounter,
 		blockVolumeMapper:      blockVolumeMapper,
-		outerVolumeSpecName:    outerVolumeSpecName,
 		volumeGIDValue:         volumeGIDValue,
 		volumeSpec:             volumeSpec,
 		remountRequired:        false,
@@ -693,7 +685,6 @@ func (asw *actualStateOfWorld) AddPodToVolume(markVolumeOpts operationexecutor.M
 	volumeName := markVolumeOpts.VolumeName
 	mounter := markVolumeOpts.Mounter
 	blockVolumeMapper := markVolumeOpts.BlockVolumeMapper
-	outerVolumeSpecName := markVolumeOpts.OuterVolumeSpecName
 	volumeGIDValue := markVolumeOpts.VolumeGIDVolume
 	volumeSpec := markVolumeOpts.VolumeSpec
 	asw.Lock()
@@ -722,7 +713,6 @@ func (asw *actualStateOfWorld) AddPodToVolume(markVolumeOpts operationexecutor.M
 			podUID:                 podUID,
 			mounter:                mounter,
 			blockVolumeMapper:      blockVolumeMapper,
-			outerVolumeSpecName:    outerVolumeSpecName,
 			volumeGIDValue:         volumeGIDValue,
 			volumeSpec:             volumeSpec,
 			volumeMountStateForPod: markVolumeOpts.VolumeMountState,
@@ -1229,7 +1219,6 @@ func getMountedVolume(
 			PodName:             mountedPod.podName,
 			VolumeName:          attachedVolume.volumeName,
 			InnerVolumeSpecName: mountedPod.volumeSpec.Name(),
-			OuterVolumeSpecName: mountedPod.outerVolumeSpecName,
 			PluginName:          attachedVolume.pluginName,
 			PodUID:              mountedPod.podUID,
 			Mounter:             mountedPod.mounter,

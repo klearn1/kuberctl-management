@@ -302,6 +302,15 @@ func (dswp *desiredStateOfWorldPopulator) processPodVolumes(
 		return
 	}
 
+	if dswp.podStateProvider.ShouldPodContainersBeTerminating(pod.UID) {
+		// If a Pod is terminating, we need to continue to refresh volumes.
+		// However, we don't need (or want) to set up new volumes for the pod.
+		// So we just call MarkRemountRequired and then bail out of this method.
+		dswp.actualStateOfWorld.MarkRemountRequired(uniquePodName)
+		dswp.markPodProcessed(uniquePodName)
+		return
+	}
+
 	allVolumesAdded := true
 	mounts, devices, seLinuxContainerContexts := util.GetPodVolumeNames(pod)
 

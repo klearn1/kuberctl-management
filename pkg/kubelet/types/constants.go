@@ -34,3 +34,9 @@ const (
 	LimitedSwap = "LimitedSwap"
 	NoSwap      = "NoSwap"
 )
+
+// InPlacePodVerticalScaling types
+const (
+	// ErrorInconsistentCPUAllocation represent the type of an inconsistentCPUAllocationError
+	ErrorInconsistentCPUAllocation = "inconsistentCPUAllocationError"
+)

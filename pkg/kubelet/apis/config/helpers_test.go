@@ -272,6 +272,7 @@ var (
 		"SerializeImagePulls",
 		"MaxParallelImagePulls",
 		"ShowHiddenMetricsForVersion",
+		"DisabledMetrics",
 		"ShutdownGracePeriodByPodPriority[*].Priority",
 		"ShutdownGracePeriodByPodPriority[*].ShutdownGracePeriodSeconds",
 		"StreamingConnectionIdleTimeout.Duration",

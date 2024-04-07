@@ -734,16 +734,21 @@ func setCgroupMemoryConfig(cgroupPath string, resourceConfig *ResourceConfig) er
 
 // Set resource config for the specified resource type on the cgroup
 func (m *cgroupManagerImpl) SetCgroupConfig(name CgroupName, resource v1.ResourceName, resourceConfig *ResourceConfig) error {
-	cgroupPaths := m.buildCgroupPaths(name)
-	cgroupResourcePath, found := cgroupPaths[string(resource)]
-	if !found {
-		return fmt.Errorf("failed to build %v cgroup fs path for cgroup %v", resource, name)
+	containerConfig := &CgroupConfig{
+		Name:               name,
+		ResourceParameters: resourceConfig,
 	}
-	switch resource {
-	case v1.ResourceCPU:
-		return setCgroupCpuConfig(cgroupResourcePath, resourceConfig)
-	case v1.ResourceMemory:
-		return setCgroupMemoryConfig(cgroupResourcePath, resourceConfig)
+
+	libcontainerCgroupConfig := m.libctCgroupConfig(containerConfig, true)
+	manager, err := libcontainercgroupmanager.New(libcontainerCgroupConfig)
+	if err != nil {
+		return err
 	}
+
+	err = manager.Set(m.toResources(resourceConfig))
+	if err != nil {
+		return err
+	}
+
 	return nil
 }

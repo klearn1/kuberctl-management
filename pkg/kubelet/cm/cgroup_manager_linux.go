@@ -664,7 +664,7 @@ func (m *cgroupManagerImpl) GetCgroupConfig(name CgroupName, resource v1.Resourc
 }
 
 // Set resource config for the specified resource type on the cgroup
-func (m *cgroupManagerImpl) SetCgroupConfig(name CgroupName, resource v1.ResourceName, resourceConfig *ResourceConfig) error {
+func (m *cgroupManagerImpl) SetCgroupConfig(name CgroupName, resourceConfig *ResourceConfig) error {
 	containerConfig := &CgroupConfig{
 		Name:               name,
 		ResourceParameters: resourceConfig,

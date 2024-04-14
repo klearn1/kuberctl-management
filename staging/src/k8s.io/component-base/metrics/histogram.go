@@ -232,9 +232,35 @@ type HistogramVecWithContext struct {
 	ctx context.Context
 }
 
+type exemplarHistogramVec struct {
+	histogramVec *HistogramVecWithContext
+	observer     prometheus.Observer
+}
+
+func (h *exemplarHistogramVec) Observe(v float64) {
+	h.withExemplar(v)
+}
+
+func (h *exemplarHistogramVec) withExemplar(v float64) {
+	var exemplarLabels prometheus.Labels
+	maybeSpanCtx := trace.SpanContextFromContext(h.histogramVec.ctx)
+	if maybeSpanCtx.IsValid() {
+		exemplarLabels = prometheus.Labels{
+			"trace_id": maybeSpanCtx.TraceID().String(),
+			"span_id":  maybeSpanCtx.SpanID().String(),
+		}
+	}
+	if m, ok := h.observer.(prometheus.ExemplarObserver); ok {
+		m.ObserveWithExemplar(v, exemplarLabels)
+	}
+}
+
 // WithLabelValues is the wrapper of HistogramVec.WithLabelValues.
-func (vc *HistogramVecWithContext) WithLabelValues(lvs ...string) ObserverMetric {
-	return vc.HistogramVec.WithLabelValues(lvs...)
+func (vc *HistogramVecWithContext) WithLabelValues(lvs ...string) *exemplarHistogramVec {
+	return &exemplarHistogramVec{
+		histogramVec: vc,
+		observer:     vc.HistogramVec.WithLabelValues(lvs...),
+	}
 }
 
 // With is the wrapper of HistogramVec.With.

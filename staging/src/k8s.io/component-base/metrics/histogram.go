@@ -21,6 +21,7 @@ import (
 
 	"github.com/blang/semver/v4"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Histogram is our internal representation for our wrapping struct around prometheus
@@ -31,6 +32,32 @@ type Histogram struct {
 	*HistogramOpts
 	lazyMetric
 	selfCollector
+}
+
+type exemplarHistogram struct {
+	*Histogram
+}
+
+func (h *Histogram) Observe(v float64) {
+	h.withExemplar(v)
+}
+
+func (h *Histogram) withExemplar(v float64) {
+	(&exemplarHistogram{h}).withExemplar(v)
+}
+
+func (h *exemplarHistogram) withExemplar(v float64) {
+	var exemplarLabels prometheus.Labels
+	maybeSpanCtx := trace.SpanContextFromContext(h.ctx)
+	if maybeSpanCtx.IsValid() {
+		exemplarLabels = prometheus.Labels{
+			"trace_id": maybeSpanCtx.TraceID().String(),
+			"span_id":  maybeSpanCtx.SpanID().String(),
+		}
+	}
+	if m, ok := h.Histogram.ObserverMetric.(prometheus.ExemplarObserver); ok {
+		m.ObserveWithExemplar(v, exemplarLabels)
+	}
 }
 
 // NewHistogram returns an object which is Histogram-like. However, nothing

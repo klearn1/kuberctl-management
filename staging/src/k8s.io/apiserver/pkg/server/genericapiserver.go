@@ -53,6 +53,7 @@ import (
 	"k8s.io/apiserver/pkg/storageversion"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	restclient "k8s.io/client-go/rest"
+	cliflag "k8s.io/component-base/cli/flag"
 	"k8s.io/klog/v2"
 	openapibuilder3 "k8s.io/kube-openapi/pkg/builder3"
 	openapicommon "k8s.io/kube-openapi/pkg/common"
@@ -194,6 +195,9 @@ type GenericAPIServer struct {
 	readyzRegistry  healthCheckRegistry
 	livezRegistry   healthCheckRegistry
 
+	// component flags
+	flagzRegistry flagzRegistry
+
 	livezGracePeriod time.Duration
 
 	// auditing. The backend is started before the server starts listening.
@@ -292,6 +296,8 @@ type DelegationTarget interface {
 	// HealthzChecks returns the healthz checks that need to be combined
 	HealthzChecks() []healthz.HealthChecker
 
+	Flags() []cliflag.NamedFlagSets
+
 	// ListedPaths returns the paths for supporting an index
 	ListedPaths() []string
 
@@ -322,6 +328,9 @@ func (s *GenericAPIServer) PreShutdownHooks() map[string]preShutdownHookEntry {
 }
 func (s *GenericAPIServer) HealthzChecks() []healthz.HealthChecker {
 	return s.healthzRegistry.checks
+}
+func (s *GenericAPIServer) Flags() []cliflag.NamedFlagSets {
+	return s.flagzRegistry.flags
 }
 func (s *GenericAPIServer) ListedPaths() []string {
 	return s.listedPathProvider.ListedPaths()
@@ -390,6 +399,9 @@ func (s emptyDelegate) PreShutdownHooks() map[string]preShutdownHookEntry {
 func (s emptyDelegate) HealthzChecks() []healthz.HealthChecker {
 	return []healthz.HealthChecker{}
 }
+func (s emptyDelegate) Flags() []cliflag.NamedFlagSets {
+	return []cliflag.NamedFlagSets{}
+}
 func (s emptyDelegate) ListedPaths() []string {
 	return []string{}
 }
@@ -436,6 +448,7 @@ func (s *GenericAPIServer) PrepareRun() preparedGenericAPIServer {
 		klog.Errorf("Failed to install readyz shutdown check %s", err)
 	}
 	s.installReadyz()
+	s.installFlagz()
 
 	return preparedGenericAPIServer{s}
 }

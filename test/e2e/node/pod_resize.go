@@ -1347,7 +1347,6 @@ func doPodResizeTests() {
 		ginkgo.It(tc.name, func(ctx context.Context) {
 			var testPod, patchedPod *v1.Pod
 			var pErr error
-			var nodeName string
 
 			tStamp := strconv.Itoa(time.Now().Nanosecond())
 			initDefaultResizePolicy(tc.containers)
@@ -1358,10 +1357,14 @@ func doPodResizeTests() {
 				nodes, err := e2enode.GetReadySchedulableNodes(context.Background(), f.ClientSet)
 				framework.ExpectNoError(err)
 
-				nodeName = nodes.Items[0].Name
-
-				addExtendedResource(f.ClientSet, nodeName, fakeExtendedResource, resource.MustParse("123"))
-				testPod.Spec.NodeName = nodeName
+				for _, node := range nodes.Items {
+					addExtendedResource(f.ClientSet, node.Name, fakeExtendedResource, resource.MustParse("123"))
+				}
+				defer func() {
+					for _, node := range nodes.Items {
+						removeExtendedResource(f.ClientSet, node.Name, fakeExtendedResource)
+					}
+				}()
 			}
 
 			ginkgo.By("creating pod")
@@ -1416,10 +1419,6 @@ func doPodResizeTests() {
 			ginkgo.By("deleting pod")
 			err = e2epod.DeletePodWithWait(ctx, f.ClientSet, newPod)
 			framework.ExpectNoError(err, "failed to delete pod")
-
-			if tc.addExtendedResource {
-				removeExtendedResource(f.ClientSet, nodeName, fakeExtendedResource)
-			}
 		})
 	}
 }

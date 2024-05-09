@@ -48,17 +48,7 @@ func FindPort(pod *v1.Pod, svcPort *v1.ServicePort) (int, error) {
 	return 0, fmt.Errorf("no suitable port for manifest: %s", pod.UID)
 }
 
-// ContainerType signifies container type
-type ContainerType int
 
-const (
-	// Containers is for normal containers
-	Containers ContainerType = 1 << iota
-	// InitContainers is for init containers
-	InitContainers
-	// EphemeralContainers is for ephemeral containers
-	EphemeralContainers
-)
 
 // AllContainers specifies that all containers be visited
 const AllContainers ContainerType = InitContainers | Containers | EphemeralContainers

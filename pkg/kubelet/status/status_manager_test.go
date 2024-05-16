@@ -507,8 +507,9 @@ func TestStatusNormalizationEnforcesMaxBytes(t *testing.T) {
 		containerStatus = append(containerStatus, s)
 	}
 	podStatus := v1.PodStatus{
-		InitContainerStatuses: containerStatus[:24],
-		ContainerStatuses:     containerStatus[24:],
+		InitContainerStatuses:      containerStatus[:16],
+		ContainerStatuses:          containerStatus[16:32],
+		EphemeralContainerStatuses: containerStatus[32:],
 	}
 	result := normalizeStatus(&pod, &podStatus)
 	count := 0

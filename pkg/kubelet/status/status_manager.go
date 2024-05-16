@@ -995,7 +995,7 @@ func (m *manager) needsReconcile(uid types.UID, status v1.PodStatus) bool {
 // Related issue #15262/PR #15263 to move apiserver to RFC339NANO is closed.
 func normalizeStatus(pod *v1.Pod, status *v1.PodStatus) *v1.PodStatus {
 	bytesPerStatus := kubecontainer.MaxPodTerminationMessageLogLength
-	if containers := len(pod.Spec.Containers) + len(pod.Spec.InitContainers); containers > 0 {
+	if containers := len(pod.Spec.Containers) + len(pod.Spec.InitContainers) + len(pod.Spec.EphemeralContainers); containers > 0 {
 		bytesPerStatus = bytesPerStatus / containers
 	}
 	normalizeTimeStamp := func(t *metav1.Time) {
@@ -1038,8 +1038,18 @@ func normalizeStatus(pod *v1.Pod, status *v1.PodStatus) *v1.PodStatus {
 		normalizeContainerState(&cstatus.State)
 		normalizeContainerState(&cstatus.LastTerminationState)
 	}
-	// Sort the container statuses, so that the order won't affect the result of comparison
+	// Sort the init container statuses, so that the order won't affect the result of comparison
 	kubetypes.SortInitContainerStatuses(pod, status.InitContainerStatuses)
+
+	// update ephtemeral container statuses
+	for i := range status.EphemeralContainerStatuses {
+		cstatus := &status.EphemeralContainerStatuses[i]
+		normalizeContainerState(&cstatus.State)
+		normalizeContainerState(&cstatus.LastTerminationState)
+	}
+	// Sort the ephtemeral container statuses, so that the order won't affect the result of comparison
+	sort.Sort(kubetypes.SortedContainerStatuses(status.EphemeralContainerStatuses))
+
 	return status
 }
 

@@ -1023,32 +1023,25 @@ func normalizeStatus(pod *v1.Pod, status *v1.PodStatus) *v1.PodStatus {
 		normalizeTimeStamp(&condition.LastTransitionTime)
 	}
 
-	// update container statuses
-	for i := range status.ContainerStatuses {
-		cstatus := &status.ContainerStatuses[i]
-		normalizeContainerState(&cstatus.State)
-		normalizeContainerState(&cstatus.LastTerminationState)
+	normalizeContainerStatuses := func(containerStatuses []v1.ContainerStatus) {
+		for i := range containerStatuses {
+			cstatus := &containerStatuses[i]
+			normalizeContainerState(&cstatus.State)
+			normalizeContainerState(&cstatus.LastTerminationState)
+		}
+		// Sort the container statuses, so that the order won't affect the result of comparison
+		sort.Sort(kubetypes.SortedContainerStatuses(containerStatuses))
 	}
-	// Sort the container statuses, so that the order won't affect the result of comparison
-	sort.Sort(kubetypes.SortedContainerStatuses(status.ContainerStatuses))
 
-	// update init container statuses
-	for i := range status.InitContainerStatuses {
-		cstatus := &status.InitContainerStatuses[i]
-		normalizeContainerState(&cstatus.State)
-		normalizeContainerState(&cstatus.LastTerminationState)
-	}
-	// Sort the init container statuses, so that the order won't affect the result of comparison
+	// Normalize and sort container statuses
+	normalizeContainerStatuses(status.ContainerStatuses)
+
+	// Normalize and sort init container statuses
+	normalizeContainerStatuses(status.InitContainerStatuses)
 	kubetypes.SortInitContainerStatuses(pod, status.InitContainerStatuses)
 
-	// update ephtemeral container statuses
-	for i := range status.EphemeralContainerStatuses {
-		cstatus := &status.EphemeralContainerStatuses[i]
-		normalizeContainerState(&cstatus.State)
-		normalizeContainerState(&cstatus.LastTerminationState)
-	}
-	// Sort the ephtemeral container statuses, so that the order won't affect the result of comparison
-	sort.Sort(kubetypes.SortedContainerStatuses(status.EphemeralContainerStatuses))
+	// Normalize and sort ephemeral container statuses
+	normalizeContainerStatuses(status.EphemeralContainerStatuses)
 
 	return status
 }

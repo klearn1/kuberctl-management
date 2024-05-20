@@ -19,6 +19,8 @@ package cm
 import (
 	"errors"
 	"fmt"
+	"k8s.io/utils/ptr"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -647,20 +649,40 @@ func getCgroupMemoryConfig(cgroupPath string) (*ResourceConfig, error) {
 
 }
 
+func libcontainerCgroupResourcesToResourceConfig(cgroupResources libcontainerconfigs.Resources) *ResourceConfig {
+	// TODO: @iholder101, should support more values here, e.g. swap memory
+	return &ResourceConfig{
+		Memory:        ptr.To(cgroupResources.Memory),
+		CPUShares:     ptr.To(cgroupResources.CpuShares),
+		CPUQuota:      ptr.To(cgroupResources.CpuQuota),
+		CPUPeriod:     ptr.To(cgroupResources.CpuPeriod),
+		HugePageLimit: nil, // TODO: @iholder101, there's more than one limit defined here
+		PidsLimit:     ptr.To(cgroupResources.PidsLimit),
+		Unified:       maps.Clone(cgroupResources.Unified),
+	}
+}
+
 // Get the resource config values applied to the cgroup for specified resource type
 func (m *cgroupManagerImpl) GetCgroupConfig(name CgroupName, resource v1.ResourceName) (*ResourceConfig, error) {
-	cgroupPaths := m.buildCgroupPaths(name)
-	cgroupResourcePath, found := cgroupPaths[string(resource)]
-	if !found {
-		return nil, fmt.Errorf("failed to build %v cgroup fs path for cgroup %v", resource, name)
+	containerConfig := &CgroupConfig{Name: name}
+	libcontainerCgroupConfig := m.libctCgroupConfig(containerConfig, false)
+
+	manager, err := libcontainercgroupmanager.New(libcontainerCgroupConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create a libcontainer cgroup manager: %w", err)
 	}
-	switch resource {
-	case v1.ResourceCPU:
-		return getCgroupCpuConfig(cgroupResourcePath)
-	case v1.ResourceMemory:
-		return getCgroupMemoryConfig(cgroupResourcePath)
+
+	cgroups, err := manager.GetCgroups()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get libcontainer cgroups information: %w", err)
 	}
-	return nil, fmt.Errorf("unsupported resource %v for cgroup %v", resource, name)
+
+	cgroupResources := cgroups.Resources
+	if cgroupResources == nil {
+		return nil, fmt.Errorf("cgroup resources are nil for cgroup %v", name)
+	}
+
+	return libcontainerCgroupResourcesToResourceConfig(*cgroupResources), nil
 }
 
 // Set resource config for the specified resource type on the cgroup

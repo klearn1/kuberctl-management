@@ -742,12 +742,12 @@ func (m *cgroupManagerImpl) SetCgroupConfig(name CgroupName, resource v1.Resourc
 	libcontainerCgroupConfig := m.libctCgroupConfig(containerConfig, true)
 	manager, err := libcontainercgroupmanager.New(libcontainerCgroupConfig)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create a libcontainer cgroup manager: %w", err)
 	}
 
 	err = manager.Set(m.toResources(resourceConfig))
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to set resources through cgroup manager: %w", err)
 	}
 
 	return nil

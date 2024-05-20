@@ -129,9 +129,9 @@ func (m *podContainerManagerImpl) GetPodCgroupMemoryUsage(pod *v1.Pod) (uint64, 
 	return uint64(memUsage), nil
 }
 
-func (m *podContainerManagerImpl) GetPodCgroupConfig(pod *v1.Pod, resource v1.ResourceName) (*ResourceConfig, error) {
+func (m *podContainerManagerImpl) GetPodCgroupConfig(pod *v1.Pod) (*ResourceConfig, error) {
 	podCgroupName, _ := m.GetPodContainerName(pod)
-	return m.cgroupManager.GetCgroupConfig(podCgroupName, resource)
+	return m.cgroupManager.GetCgroupConfig(podCgroupName)
 }
 
 func (m *podContainerManagerImpl) SetPodCgroupConfig(pod *v1.Pod, resourceConfig *ResourceConfig) error {
@@ -346,7 +346,7 @@ func (m *podContainerManagerNoop) GetPodCgroupMemoryUsage(_ *v1.Pod) (uint64, er
 	return 0, nil
 }
 
-func (m *podContainerManagerNoop) GetPodCgroupConfig(_ *v1.Pod, _ v1.ResourceName) (*ResourceConfig, error) {
+func (m *podContainerManagerNoop) GetPodCgroupConfig(_ *v1.Pod) (*ResourceConfig, error) {
 	return nil, nil
 }
 

@@ -24,7 +24,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,7 +33,6 @@ import (
 	libcontainercgroupmanager "github.com/opencontainers/runc/libcontainer/cgroups/manager"
 	cgroupsystemd "github.com/opencontainers/runc/libcontainer/cgroups/systemd"
 	libcontainerconfigs "github.com/opencontainers/runc/libcontainer/configs"
-	v1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
 	v1helper "k8s.io/kubernetes/pkg/apis/core/v1/helper"
 
@@ -576,79 +574,6 @@ func CpuWeightToCpuShares(cpuWeight uint64) uint64 {
 	return uint64((((cpuWeight - 1) * 262142) / 9999) + 2)
 }
 
-func getCgroupv1CpuConfig(cgroupPath string) (*ResourceConfig, error) {
-	cpuQuotaStr, errQ := fscommon.GetCgroupParamString(cgroupPath, "cpu.cfs_quota_us")
-	if errQ != nil {
-		return nil, fmt.Errorf("failed to read CPU quota for cgroup %v: %v", cgroupPath, errQ)
-	}
-	cpuQuota, errInt := strconv.ParseInt(cpuQuotaStr, 10, 64)
-	if errInt != nil {
-		return nil, fmt.Errorf("failed to convert CPU quota as integer for cgroup %v: %v", cgroupPath, errInt)
-	}
-	cpuPeriod, errP := fscommon.GetCgroupParamUint(cgroupPath, "cpu.cfs_period_us")
-	if errP != nil {
-		return nil, fmt.Errorf("failed to read CPU period for cgroup %v: %v", cgroupPath, errP)
-	}
-	cpuShares, errS := fscommon.GetCgroupParamUint(cgroupPath, "cpu.shares")
-	if errS != nil {
-		return nil, fmt.Errorf("failed to read CPU shares for cgroup %v: %v", cgroupPath, errS)
-	}
-	return &ResourceConfig{CPUShares: &cpuShares, CPUQuota: &cpuQuota, CPUPeriod: &cpuPeriod}, nil
-}
-
-func getCgroupv2CpuConfig(cgroupPath string) (*ResourceConfig, error) {
-	var cpuLimitStr, cpuPeriodStr string
-	cpuLimitAndPeriod, err := fscommon.GetCgroupParamString(cgroupPath, "cpu.max")
-	if err != nil {
-		return nil, fmt.Errorf("failed to read cpu.max file for cgroup %v: %v", cgroupPath, err)
-	}
-	numItems, errScan := fmt.Sscanf(cpuLimitAndPeriod, "%s %s", &cpuLimitStr, &cpuPeriodStr)
-	if errScan != nil || numItems != 2 {
-		return nil, fmt.Errorf("failed to correctly parse content of cpu.max file ('%s') for cgroup %v: %v",
-			cpuLimitAndPeriod, cgroupPath, errScan)
-	}
-	cpuLimit := int64(-1)
-	if cpuLimitStr != Cgroup2MaxCpuLimit {
-		cpuLimit, err = strconv.ParseInt(cpuLimitStr, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("failed to convert CPU limit as integer for cgroup %v: %v", cgroupPath, err)
-		}
-	}
-	cpuPeriod, errPeriod := strconv.ParseUint(cpuPeriodStr, 10, 64)
-	if errPeriod != nil {
-		return nil, fmt.Errorf("failed to convert CPU period as integer for cgroup %v: %v", cgroupPath, errPeriod)
-	}
-	cpuWeight, errWeight := fscommon.GetCgroupParamUint(cgroupPath, "cpu.weight")
-	if errWeight != nil {
-		return nil, fmt.Errorf("failed to read CPU weight for cgroup %v: %v", cgroupPath, errWeight)
-	}
-	cpuShares := CpuWeightToCpuShares(cpuWeight)
-	return &ResourceConfig{CPUShares: &cpuShares, CPUQuota: &cpuLimit, CPUPeriod: &cpuPeriod}, nil
-}
-
-func getCgroupCpuConfig(cgroupPath string) (*ResourceConfig, error) {
-	if libcontainercgroups.IsCgroup2UnifiedMode() {
-		return getCgroupv2CpuConfig(cgroupPath)
-	} else {
-		return getCgroupv1CpuConfig(cgroupPath)
-	}
-}
-
-func getCgroupMemoryConfig(cgroupPath string) (*ResourceConfig, error) {
-	memLimitFile := "memory.limit_in_bytes"
-	if libcontainercgroups.IsCgroup2UnifiedMode() {
-		memLimitFile = "memory.max"
-	}
-	memLimit, err := fscommon.GetCgroupParamUint(cgroupPath, memLimitFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read %s for cgroup %v: %v", memLimitFile, cgroupPath, err)
-	}
-	mLim := int64(memLimit)
-	//TODO(vinaykul,InPlacePodVerticalScaling): Add memory request support
-	return &ResourceConfig{Memory: &mLim}, nil
-
-}
-
 func libcontainerCgroupResourcesToResourceConfig(cgroupResources libcontainerconfigs.Resources) *ResourceConfig {
 	// TODO: @iholder101, should support more values here, e.g. swap memory
 	return &ResourceConfig{
@@ -663,7 +588,7 @@ func libcontainerCgroupResourcesToResourceConfig(cgroupResources libcontainercon
 }
 
 // Get the resource config values applied to the cgroup for specified resource type
-func (m *cgroupManagerImpl) GetCgroupConfig(name CgroupName, resource v1.ResourceName) (*ResourceConfig, error) {
+func (m *cgroupManagerImpl) GetCgroupConfig(name CgroupName) (*ResourceConfig, error) {
 	containerConfig := &CgroupConfig{Name: name}
 	libcontainerCgroupConfig := m.libctCgroupConfig(containerConfig, false)
 

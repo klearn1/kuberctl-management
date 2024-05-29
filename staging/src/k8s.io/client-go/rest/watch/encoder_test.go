@@ -21,7 +21,7 @@ import (
 	"io"
 	"testing"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -34,7 +34,7 @@ import (
 
 // getEncoder mimics how k8s.io/client-go/rest.createSerializers creates a encoder
 func getEncoder() runtime.Encoder {
-	jsonSerializer := runtimejson.NewSerializer(runtimejson.DefaultMetaFactory, scheme.Scheme, scheme.Scheme, false)
+	jsonSerializer := runtimejson.NewSerializerWithOptions(runtimejson.DefaultMetaFactory, scheme.Scheme, scheme.Scheme, runtimejson.SerializerOptions{})
 	directCodecFactory := scheme.Codecs.WithoutConversion()
 	return directCodecFactory.EncoderForVersion(jsonSerializer, v1.SchemeGroupVersion)
 }

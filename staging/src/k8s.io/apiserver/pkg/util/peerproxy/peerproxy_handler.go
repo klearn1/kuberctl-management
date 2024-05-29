@@ -83,9 +83,10 @@ type peerProxyHandler struct {
 }
 
 type serviceableByResponse struct {
-	locallyServiceable             bool
-	isRequestForCRDOrAggregatedAPI bool
-	peerEndpoints                  []string
+	locallyServiceable bool
+	// Indicates whether the request was for a CRD/Aggregated API/unknown (mis-typed) resource.
+	isRequestForUnrecognizedResource bool
+	peerEndpoints                    []string
 }
 
 // responder implements rest.Responder for assisting a connector in writing objects or errors.
@@ -158,7 +159,7 @@ func (h *peerProxyHandler) WrapHandler(handler http.Handler) http.Handler {
 			return
 		}
 
-		if serviceableByResp.isRequestForCRDOrAggregatedAPI || serviceableByResp.locallyServiceable {
+		if serviceableByResp.isRequestForUnrecognizedResource || serviceableByResp.locallyServiceable {
 			handler.ServeHTTP(w, r)
 			return
 		}
@@ -187,7 +188,7 @@ func (h *peerProxyHandler) findServiceableByServers(gvr schema.GroupVersionResou
 	if !ok || apiserversi == nil {
 		klog.V(3).Infof("no StorageVersions found for the GVR: %v", gvr)
 		return serviceableByResponse{
-			isRequestForCRDOrAggregatedAPI: true,
+			isRequestForUnrecognizedResource: true,
 		}, nil
 	}
 

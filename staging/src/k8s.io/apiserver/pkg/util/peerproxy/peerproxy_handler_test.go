@@ -63,10 +63,14 @@ type FakeSVMapData struct {
 	serverIds []string
 }
 
-type reconciler struct {
-	do       bool
+type server struct {
 	publicIP string
 	serverId string
+}
+
+type reconciler struct {
+	do      bool
+	servers []server
 }
 
 func TestPeerProxy(t *testing.T) {
@@ -154,9 +158,13 @@ func TestPeerProxy(t *testing.T) {
 					Resource: "bar"},
 				serverIds: []string{remoteServerId}},
 			reconcilerConfig: reconciler{
-				do:       true,
-				publicIP: "1.2.3.4",
-				serverId: remoteServerId,
+				do: true,
+				servers: []server{
+					{
+						publicIP: "1.2.3.4",
+						serverId: remoteServerId,
+					},
+				},
 			},
 			metrics: []string{
 				"apiserver_rerouted_request_total",
@@ -179,9 +187,13 @@ func TestPeerProxy(t *testing.T) {
 					Resource: "bar"},
 				serverIds: []string{remoteServerId}},
 			reconcilerConfig: reconciler{
-				do:       true,
-				publicIP: "1.2.3.4",
-				serverId: remoteServerId,
+				do: true,
+				servers: []server{
+					{
+						publicIP: "1.2.3.4",
+						serverId: remoteServerId,
+					},
+				},
 			},
 			metrics: []string{
 				"apiserver_rerouted_request_total",
@@ -204,9 +216,38 @@ func TestPeerProxy(t *testing.T) {
 					Resource: "bar"},
 				serverIds: []string{"aggregated-apiserver", remoteServerId}},
 			reconcilerConfig: reconciler{
-				do:       true,
-				publicIP: "1.2.3.4",
-				serverId: remoteServerId,
+				do: true,
+				servers: []server{
+					{
+						publicIP: "1.2.3.4",
+						serverId: remoteServerId,
+					},
+				},
+			},
+		},
+		{
+			desc:                 "503 if all peers had invalid host:port info",
+			requestPath:          "/api/foo/bar",
+			expectedStatus:       http.StatusServiceUnavailable,
+			informerFinishedSync: true,
+			svdata: FakeSVMapData{
+				gvr: schema.GroupVersionResource{
+					Group:    "core",
+					Version:  "foo",
+					Resource: "bar"},
+				serverIds: []string{"aggregated-apiserver", remoteServerId}},
+			reconcilerConfig: reconciler{
+				do: true,
+				servers: []server{
+					{
+						publicIP: "1[2.4",
+						serverId: "aggregated-apiserver",
+					},
+					{
+						publicIP: "2.4]6",
+						serverId: remoteServerId,
+					},
+				},
 			},
 		},
 	}
@@ -227,10 +268,15 @@ func TestPeerProxy(t *testing.T) {
 				defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.APIServerIdentity, true)()
 				defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.StorageVersionAPI, true)()
 
-				reconciler.UpdateLease(tt.reconcilerConfig.serverId,
-					tt.reconcilerConfig.publicIP,
-					[]corev1.EndpointPort{{Name: "foo",
-						Port: 8080, Protocol: "TCP"}})
+				for _, server := range tt.reconcilerConfig.servers {
+					err := reconciler.UpdateLease(server.serverId,
+						server.publicIP,
+						[]corev1.EndpointPort{{Name: "foo",
+							Port: 8080, Protocol: "TCP"}})
+					if err != nil {
+						t.Fatalf("failed to update peer endpoint lease - %v", err)
+					}
+				}
 			}
 
 			req, err := http.NewRequest(http.MethodGet, server.URL+tt.requestPath, nil)
@@ -278,7 +324,7 @@ func newFakePeerEndpointReconciler(t *testing.T) reconcilers.PeerEndpointLeaseRe
 func newHandlerChain(t *testing.T, handler http.Handler, reconciler reconcilers.PeerEndpointLeaseReconciler, informerFinishedSync bool, svdata FakeSVMapData) http.Handler {
 	// Add peerproxy handler
 	s := serializer.NewCodecFactory(runtime.NewScheme()).WithoutConversion()
-	peerProxyHandler, err := newFakePeerProxyHandler(informerFinishedSync, reconciler, svdata, localServerId, s)
+	peerProxyHandler, err := newFakePeerProxyHandler(reconciler, svdata, localServerId, s)
 	if err != nil {
 		t.Fatalf("Error creating peer proxy handler: %v", err)
 	}
@@ -294,7 +340,7 @@ func newHandlerChain(t *testing.T, handler http.Handler, reconciler reconcilers.
 	return handler
 }
 
-func newFakePeerProxyHandler(informerFinishedSync bool, reconciler reconcilers.PeerEndpointLeaseReconciler, svdata FakeSVMapData, id string, s runtime.NegotiatedSerializer) (*peerProxyHandler, error) {
+func newFakePeerProxyHandler(reconciler reconcilers.PeerEndpointLeaseReconciler, svdata FakeSVMapData, id string, s runtime.NegotiatedSerializer) (*peerProxyHandler, error) {
 	clientset := fake.NewSimpleClientset()
 	informerFactory := informers.NewSharedInformerFactory(clientset, 0)
 	clientConfig := &transport.Config{

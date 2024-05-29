@@ -34,19 +34,11 @@ type Histogram struct {
 	selfCollector
 }
 
-type exemplarHistogram struct {
-	*Histogram
-}
-
 func (h *Histogram) Observe(v float64) {
 	h.withExemplar(v)
 }
 
 func (h *Histogram) withExemplar(v float64) {
-	(&exemplarHistogram{h}).withExemplar(v)
-}
-
-func (h *exemplarHistogram) withExemplar(v float64) {
 	var exemplarLabels prometheus.Labels
 	maybeSpanCtx := trace.SpanContextFromContext(h.ctx)
 	if maybeSpanCtx.IsValid() {
@@ -55,7 +47,7 @@ func (h *exemplarHistogram) withExemplar(v float64) {
 			"span_id":  maybeSpanCtx.SpanID().String(),
 		}
 	}
-	if m, ok := h.Histogram.ObserverMetric.(prometheus.ExemplarObserver); ok {
+	if m, ok := h.ObserverMetric.(prometheus.ExemplarObserver); ok {
 		m.ObserveWithExemplar(v, exemplarLabels)
 	}
 }

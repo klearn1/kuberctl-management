@@ -1243,15 +1243,11 @@ func evictionMessage(resourceToReclaim v1.ResourceName, pod *v1.Pod, stats stats
 	if !ok {
 		return
 	}
+	containers := pod.Spec.Containers
+	if len(pod.Spec.InitContainers) != 0 {
+		containers = append(containers, pod.Spec.InitContainers...)
+	}
 	for _, containerStats := range podStats.Containers {
-		containers := pod.Spec.Containers
-		if utilfeature.DefaultFeatureGate.Enabled(features.SidecarContainers) {
-			for _, initContainer := range pod.Spec.InitContainers {
-				if initContainer.RestartPolicy != nil && *initContainer.RestartPolicy == v1.ContainerRestartPolicyAlways {
-					containers = append(containers, initContainer)
-				}
-			}
-		}
 		for _, container := range containers {
 			if container.Name == containerStats.Name {
 				requests := container.Resources.Requests[resourceToReclaim]

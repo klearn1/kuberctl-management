@@ -39,17 +39,19 @@ func (h *Histogram) Observe(v float64) {
 }
 
 func (h *Histogram) withExemplar(v float64) {
-	var exemplarLabels prometheus.Labels
-	maybeSpanCtx := trace.SpanContextFromContext(h.ctx)
-	if maybeSpanCtx.IsValid() {
-		exemplarLabels = prometheus.Labels{
-			"trace_id": maybeSpanCtx.TraceID().String(),
-			"span_id":  maybeSpanCtx.SpanID().String(),
+	if m, ok := h.ObserverMetric.(prometheus.ExemplarObserver); ok {
+		maybeSpanCtx := trace.SpanContextFromContext(h.ctx)
+		if maybeSpanCtx.IsValid() {
+			exemplarLabels := prometheus.Labels{
+				"trace_id": maybeSpanCtx.TraceID().String(),
+				"span_id":  maybeSpanCtx.SpanID().String(),
+			}
+			m.ObserveWithExemplar(v, exemplarLabels)
+			return
 		}
 	}
-	if m, ok := h.ObserverMetric.(prometheus.ExemplarObserver); ok {
-		m.ObserveWithExemplar(v, exemplarLabels)
-	}
+
+	h.ObserverMetric.Observe(v)
 }
 
 // NewHistogram returns an object which is Histogram-like. However, nothing

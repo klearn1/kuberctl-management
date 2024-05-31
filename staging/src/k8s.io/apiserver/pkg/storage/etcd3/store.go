@@ -217,9 +217,12 @@ func (s *store) Create(ctx context.Context, key string, obj, out runtime.Object,
 	}
 	span.AddEvent("Encode succeeded", attribute.Int("len", len(data)))
 
-	opts, err := s.ttlOpts(ctx, int64(ttl))
-	if err != nil {
-		return err
+	var lease clientv3.LeaseID
+	if ttl != 0 {
+		lease, err = s.leaseManager.GetLease(ctx, int64(ttl))
+		if err != nil {
+			return err
+		}
 	}
 
 	newData, err := s.transformer.TransformToStorage(ctx, data, authenticatedDataString(preparedKey))
@@ -230,11 +233,7 @@ func (s *store) Create(ctx context.Context, key string, obj, out runtime.Object,
 	span.AddEvent("TransformToStorage succeeded")
 
 	startTime := time.Now()
-	txnResp, err := s.client.KV.Txn(ctx).If(
-		notFound(preparedKey),
-	).Then(
-		clientv3.OpPut(preparedKey, string(newData), opts...),
-	).Commit()
+	txnResp, err := s.client.Kubernetes.OptimisticPut(ctx, preparedKey, newData, 0, kubernetes.PutOptions{LeaseID: lease})
 	metrics.RecordEtcdRequest("create", s.groupResourceString, err, startTime)
 	if err != nil {
 		span.AddEvent("Txn call failed", attribute.String("err", err.Error()))
@@ -247,8 +246,7 @@ func (s *store) Create(ctx context.Context, key string, obj, out runtime.Object,
 	}
 
 	if out != nil {
-		putResp := txnResp.Responses[0].GetResponsePut()
-		err = decode(s.codec, s.versioner, data, out, putResp.Header.Revision)
+		err = decode(s.codec, s.versioner, data, out, txnResp.Revision)
 		if err != nil {
 			span.AddEvent("decode failed", attribute.Int("len", len(data)), attribute.String("err", err.Error()))
 			recordDecodeError(s.groupResourceString, preparedKey)
@@ -1064,10 +1062,6 @@ func decodeListItem(ctx context.Context, data []byte, rev uint64, codec runtime.
 func recordDecodeError(resource string, key string) {
 	metrics.RecordDecodeError(resource)
 	klog.V(4).Infof("Decoding %s \"%s\" failed", resource, key)
-}
-
-func notFound(key string) clientv3.Cmp {
-	return clientv3.Compare(clientv3.ModRevision(key), "=", 0)
 }
 
 // getTypeName returns type name of an object for reporting purposes.

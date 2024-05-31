@@ -148,7 +148,7 @@ func (c *Client) Close() error {
 		c.Lease.Close()
 	}
 	if c.conn != nil {
-		return toErr(c.ctx, c.conn.Close())
+		return ContextError(c.ctx, c.conn.Close())
 	}
 	return c.ctx.Err()
 }
@@ -370,14 +370,13 @@ func newClient(cfg *Config) (*Client, error) {
 
 	ctx, cancel := context.WithCancel(baseCtx)
 	client := &Client{
-		conn:     nil,
-		cfg:      *cfg,
-		creds:    creds,
-		ctx:      ctx,
-		cancel:   cancel,
-		mu:       new(sync.RWMutex),
-		callOpts: defaultCallOpts,
-		lgMu:     new(sync.RWMutex),
+		conn:   nil,
+		cfg:    *cfg,
+		creds:  creds,
+		ctx:    ctx,
+		cancel: cancel,
+		mu:     new(sync.RWMutex),
+		lgMu:   new(sync.RWMutex),
 	}
 
 	var err error
@@ -400,22 +399,9 @@ func newClient(cfg *Config) (*Client, error) {
 		client.Password = cfg.Password
 		client.authTokenBundle = credentials.NewBundle(credentials.Config{})
 	}
-	if cfg.MaxCallSendMsgSize > 0 || cfg.MaxCallRecvMsgSize > 0 {
-		if cfg.MaxCallRecvMsgSize > 0 && cfg.MaxCallSendMsgSize > cfg.MaxCallRecvMsgSize {
-			return nil, fmt.Errorf("gRPC message recv limit (%d bytes) must be greater than send limit (%d bytes)", cfg.MaxCallRecvMsgSize, cfg.MaxCallSendMsgSize)
-		}
-		callOpts := []grpc.CallOption{
-			defaultWaitForReady,
-			defaultMaxCallSendMsgSize,
-			defaultMaxCallRecvMsgSize,
-		}
-		if cfg.MaxCallSendMsgSize > 0 {
-			callOpts[1] = grpc.MaxCallSendMsgSize(cfg.MaxCallSendMsgSize)
-		}
-		if cfg.MaxCallRecvMsgSize > 0 {
-			callOpts[2] = grpc.MaxCallRecvMsgSize(cfg.MaxCallRecvMsgSize)
-		}
-		client.callOpts = callOpts
+	client.callOpts, err = Options(cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	client.resolver = resolver.New(cfg.Endpoints...)
@@ -573,7 +559,9 @@ func isUnavailableErr(ctx context.Context, err error) bool {
 	return false
 }
 
-func toErr(ctx context.Context, err error) error {
+// ContextError converts the error into an EtcdError if the error message matches one of
+// the defined messages; otherwise, it tries to retrieve the context error.
+func ContextError(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
 	}

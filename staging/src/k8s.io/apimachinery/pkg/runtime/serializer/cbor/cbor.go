@@ -100,15 +100,20 @@ func (s *serializer) Identifier() runtime.Identifier {
 }
 
 func (s *serializer) Encode(obj runtime.Object, w io.Writer) error {
+	return s.encode(modes.Encode, obj, w)
+}
+
+func (s *serializer) encode(mode modes.EncMode, obj runtime.Object, w io.Writer) error {
 	if _, err := w.Write(selfDescribedCBOR); err != nil {
 		return err
 	}
 
-	e := modes.Encode.NewEncoder(w)
+	var v interface{} = obj
 	if u, ok := obj.(runtime.Unstructured); ok {
-		return e.Encode(u.UnstructuredContent())
+		v = u.UnstructuredContent()
 	}
-	return e.Encode(obj)
+
+	return mode.MarshalTo(v, w)
 }
 
 // gvkWithDefaults returns group kind and version defaulting from provided default

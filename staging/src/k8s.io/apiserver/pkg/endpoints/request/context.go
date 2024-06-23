@@ -49,10 +49,6 @@ func WithValue(parent context.Context, key interface{}, val interface{}) context
 	return context.WithValue(parent, key, val)
 }
 
-func ValueFrom(ctx context.Context, key interface{}) interface{} {
-	return ctx.Value(key)
-}
-
 // WithNamespace returns a copy of parent in which the namespace value is set
 func WithNamespace(parent context.Context, namespace string) context.Context {
 	return WithValue(parent, namespaceKey, namespace)

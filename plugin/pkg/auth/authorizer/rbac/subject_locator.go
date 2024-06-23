@@ -24,6 +24,7 @@ import (
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
+	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	rbacregistryvalidation "k8s.io/kubernetes/pkg/registry/rbac/validation"
 )
 
@@ -68,12 +69,12 @@ func (r *SubjectAccessEvaluator) AllowedSubjects(ctx context.Context, requestAtt
 	}
 	errorlist := []error{}
 
-	if clusterRoleBindings, err := r.clusterRoleBindingLister.ListClusterRoleBindings(ctx); err != nil {
+	if clusterRoleBindings, err := r.clusterRoleBindingLister.ListClusterRoleBindings(genericapirequest.WithNamespace(ctx, "")); err != nil {
 		errorlist = append(errorlist, err)
 
 	} else {
 		for _, clusterRoleBinding := range clusterRoleBindings {
-			rules, err := r.roleToRuleMapper.GetRoleReferenceRules(ctx, clusterRoleBinding.RoleRef, "")
+			rules, err := r.roleToRuleMapper.GetRoleReferenceRules(genericapirequest.WithNamespace(ctx, ""), clusterRoleBinding.RoleRef, "")
 			if err != nil {
 				// if we have an error, just keep track of it and keep processing.  Since rules are additive,
 				// missing a reference is bad, but we can continue with other rolebindings and still have a list
@@ -87,12 +88,12 @@ func (r *SubjectAccessEvaluator) AllowedSubjects(ctx context.Context, requestAtt
 	}
 
 	if namespace := requestAttributes.GetNamespace(); len(namespace) > 0 {
-		if roleBindings, err := r.roleBindingLister.ListRoleBindings(ctx, namespace); err != nil {
+		if roleBindings, err := r.roleBindingLister.ListRoleBindings(genericapirequest.WithNamespace(ctx, ""), namespace); err != nil {
 			errorlist = append(errorlist, err)
 
 		} else {
 			for _, roleBinding := range roleBindings {
-				rules, err := r.roleToRuleMapper.GetRoleReferenceRules(ctx, roleBinding.RoleRef, namespace)
+				rules, err := r.roleToRuleMapper.GetRoleReferenceRules(genericapirequest.WithNamespace(ctx, ""), roleBinding.RoleRef, namespace)
 				if err != nil {
 					// if we have an error, just keep track of it and keep processing.  Since rules are additive,
 					// missing a reference is bad, but we can continue with other rolebindings and still have a list

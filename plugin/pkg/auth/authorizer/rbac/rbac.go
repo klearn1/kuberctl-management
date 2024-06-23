@@ -29,6 +29,7 @@ import (
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
+	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	rbaclisters "k8s.io/client-go/listers/rbac/v1"
 	rbacv1helpers "k8s.io/kubernetes/pkg/apis/rbac/v1"
 	rbacregistryvalidation "k8s.io/kubernetes/pkg/registry/rbac/validation"
@@ -75,7 +76,7 @@ func (v *authorizingVisitor) visit(source fmt.Stringer, rule *rbacv1.PolicyRule,
 func (r *RBACAuthorizer) Authorize(ctx context.Context, requestAttributes authorizer.Attributes) (authorizer.Decision, string, error) {
 	ruleCheckingVisitor := &authorizingVisitor{requestAttributes: requestAttributes}
 
-	r.authorizationRuleResolver.VisitRulesFor(ctx, requestAttributes.GetUser(), requestAttributes.GetNamespace(), ruleCheckingVisitor.visit)
+	r.authorizationRuleResolver.VisitRulesFor(genericapirequest.WithNamespace(ctx, ""), requestAttributes.GetUser(), requestAttributes.GetNamespace(), ruleCheckingVisitor.visit)
 	if ruleCheckingVisitor.allowed {
 		return authorizer.DecisionAllow, ruleCheckingVisitor.reason, nil
 	}
@@ -132,7 +133,7 @@ func (r *RBACAuthorizer) RulesFor(ctx context.Context, user user.Info, namespace
 		nonResourceRules []authorizer.NonResourceRuleInfo
 	)
 
-	policyRules, err := r.authorizationRuleResolver.RulesFor(ctx, user, namespace)
+	policyRules, err := r.authorizationRuleResolver.RulesFor(genericapirequest.WithNamespace(ctx, ""), user, namespace)
 	for _, policyRule := range policyRules {
 		if len(policyRule.Resources) > 0 {
 			r := authorizer.DefaultResourceRuleInfo{

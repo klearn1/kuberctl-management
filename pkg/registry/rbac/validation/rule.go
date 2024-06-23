@@ -59,7 +59,7 @@ func ConfirmNoEscalation(ctx context.Context, ruleResolver AuthorizationRuleReso
 	}
 	namespace, _ := genericapirequest.NamespaceFrom(ctx)
 
-	ownerRules, err := ruleResolver.RulesFor(ctx, user, namespace)
+	ownerRules, err := ruleResolver.RulesFor(genericapirequest.WithNamespace(ctx, ""), user, namespace)
 	if err != nil {
 		// As per AuthorizationRuleResolver contract, this may return a non fatal error with an incomplete list of policies. Log the error and continue.
 		klog.V(1).Infof("non-fatal error getting local rules for %v: %v", user, err)
@@ -117,7 +117,7 @@ type ClusterRoleBindingLister interface {
 
 func (r *DefaultRuleResolver) RulesFor(ctx context.Context, user user.Info, namespace string) ([]rbacv1.PolicyRule, error) {
 	visitor := &ruleAccumulator{}
-	r.VisitRulesFor(ctx, user, namespace, visitor.visit)
+	r.VisitRulesFor(genericapirequest.WithNamespace(ctx, ""), user, namespace, visitor.visit)
 	return visitor.rules, utilerrors.NewAggregate(visitor.errors)
 }
 
@@ -177,7 +177,7 @@ func (d *roleBindingDescriber) String() string {
 }
 
 func (r *DefaultRuleResolver) VisitRulesFor(ctx context.Context, user user.Info, namespace string, visitor func(source fmt.Stringer, rule *rbacv1.PolicyRule, err error) bool) {
-	if clusterRoleBindings, err := r.clusterRoleBindingLister.ListClusterRoleBindings(ctx); err != nil {
+	if clusterRoleBindings, err := r.clusterRoleBindingLister.ListClusterRoleBindings(genericapirequest.WithNamespace(ctx, "")); err != nil {
 		if !visitor(nil, nil, err) {
 			return
 		}
@@ -188,7 +188,7 @@ func (r *DefaultRuleResolver) VisitRulesFor(ctx context.Context, user user.Info,
 			if !applies {
 				continue
 			}
-			rules, err := r.GetRoleReferenceRules(ctx, clusterRoleBinding.RoleRef, "")
+			rules, err := r.GetRoleReferenceRules(genericapirequest.WithNamespace(ctx, ""), clusterRoleBinding.RoleRef, "")
 			if err != nil {
 				if !visitor(nil, nil, err) {
 					return
@@ -206,7 +206,7 @@ func (r *DefaultRuleResolver) VisitRulesFor(ctx context.Context, user user.Info,
 	}
 
 	if len(namespace) > 0 {
-		if roleBindings, err := r.roleBindingLister.ListRoleBindings(ctx, namespace); err != nil {
+		if roleBindings, err := r.roleBindingLister.ListRoleBindings(genericapirequest.WithNamespace(ctx, ""), namespace); err != nil {
 			if !visitor(nil, nil, err) {
 				return
 			}
@@ -217,7 +217,7 @@ func (r *DefaultRuleResolver) VisitRulesFor(ctx context.Context, user user.Info,
 				if !applies {
 					continue
 				}
-				rules, err := r.GetRoleReferenceRules(ctx, roleBinding.RoleRef, namespace)
+				rules, err := r.GetRoleReferenceRules(genericapirequest.WithNamespace(ctx, ""), roleBinding.RoleRef, namespace)
 				if err != nil {
 					if !visitor(nil, nil, err) {
 						return
@@ -240,14 +240,14 @@ func (r *DefaultRuleResolver) VisitRulesFor(ctx context.Context, user user.Info,
 func (r *DefaultRuleResolver) GetRoleReferenceRules(ctx context.Context, roleRef rbacv1.RoleRef, bindingNamespace string) ([]rbacv1.PolicyRule, error) {
 	switch roleRef.Kind {
 	case "Role":
-		role, err := r.roleGetter.GetRole(ctx, bindingNamespace, roleRef.Name)
+		role, err := r.roleGetter.GetRole(genericapirequest.WithNamespace(ctx, ""), bindingNamespace, roleRef.Name)
 		if err != nil {
 			return nil, err
 		}
 		return role.Rules, nil
 
 	case "ClusterRole":
-		clusterRole, err := r.clusterRoleGetter.GetClusterRole(ctx, roleRef.Name)
+		clusterRole, err := r.clusterRoleGetter.GetClusterRole(genericapirequest.WithNamespace(ctx, ""), roleRef.Name)
 		if err != nil {
 			return nil, err
 		}

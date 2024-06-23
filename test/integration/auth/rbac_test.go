@@ -821,7 +821,6 @@ func TestDiscoveryUpgradeBootstrapping(t *testing.T) {
 }
 
 type authorizeRequest struct {
-	ctx      context.Context
 	ar       authorizer.AttributesRecord
 	expected authorizer.Decision
 }
@@ -831,308 +830,209 @@ type authorizeRequest struct {
 // preventing regressions in the future.
 func TestRBACContextContamination(t *testing.T) {
 	superUser := "admin/system:masters"
+	validNamespace := "pod-namespace"
+	invalidNamespace := "forbidden-namespace"
 
-	tests := []struct {
-		bootstrapRoles    bootstrapRoles
-		authorizeRequests []authorizeRequest
-	}{
-		// scenarios: a user has access to pod-namespaces to get pods
-		// but not to forbidden-namespace. We should tests that the authorizer
-		// does not leak the context namespace to the authorizer.
-		// Same tests repeated with ClusterRoleBinding and RoleBinding to exercise both code paths.
-		{
+	roles := bootstrapRoles{}
+	testcases := []authorizeRequest{}
 
-			bootstrapRoles: bootstrapRoles{
-				roles: []rbacapi.Role{
-					{
-						ObjectMeta: metav1.ObjectMeta{
-							Namespace: "pod-namespace",
-							Name:      "read-pods",
-						},
-						Rules: []rbacapi.PolicyRule{ruleReadPods},
-					},
-				},
-				roleBindings: []rbacapi.RoleBinding{
-					{
-						ObjectMeta: metav1.ObjectMeta{
-							Namespace: "pod-namespace",
-							Name:      "read-pods"},
-						Subjects: []rbacapi.Subject{
-							{Kind: "User", Name: "pod-reader"},
-						},
-						RoleRef: rbacapi.RoleRef{
-							Kind: "Role",
-							Name: "read-pods",
-						},
-					},
-				},
-			},
-			authorizeRequests: []authorizeRequest{
-				{
-					ctx: context.Background(),
-					ar: authorizer.AttributesRecord{
-						Verb:            "list",
-						Resource:        "pods",
-						APIGroup:        "",
-						APIVersion:      "v1",
-						Namespace:       "pod-namespace",
-						Subresource:     "",
-						ResourceRequest: true,
-						Name:            "",
-						User: &user.DefaultInfo{
-							Name: "pod-reader",
-							Groups: []string{
-								"system:authenticated",
-							},
-						},
-					},
-					expected: authorizer.DecisionAllow,
-				},
-				{
-					ctx: context.Background(),
-					ar: authorizer.AttributesRecord{
-						Verb:            "list",
-						Resource:        "pods",
-						APIGroup:        "",
-						APIVersion:      "v1",
-						Namespace:       "forbidden-namespace",
-						Subresource:     "",
-						ResourceRequest: true,
-						Name:            "",
-						User: &user.DefaultInfo{
-							Name: "pod-reader",
-							Groups: []string{
-								"system:authenticated",
-							},
-						},
-					},
-					expected: authorizer.DecisionNoOpinion,
-				},
-				{
-					ctx: genericapirequest.WithNamespace(context.Background(), "pod-namespace"), // should be used
-					ar: authorizer.AttributesRecord{
-						Verb:            "list",
-						Resource:        "pods",
-						APIGroup:        "",
-						APIVersion:      "v1",
-						Namespace:       "forbidden-namespace",
-						Subresource:     "",
-						ResourceRequest: true,
-						Name:            "",
-						User: &user.DefaultInfo{
-							Name: "pod-reader",
-							Groups: []string{
-								"system:authenticated",
-							},
-						},
-					},
-					expected: authorizer.DecisionNoOpinion,
-				},
-				{
-					ctx: context.Background(),
-					ar: authorizer.AttributesRecord{
-						Verb:            "list",
-						Resource:        "pods",
-						APIGroup:        "",
-						APIVersion:      "v1",
-						Namespace:       "pod-namespace",
-						Subresource:     "",
-						ResourceRequest: true,
-						Name:            "",
-						User: &user.DefaultInfo{
-							Name: "bob",
-							Groups: []string{
-								"system:authenticated",
-							},
-						},
-					},
-					expected: authorizer.DecisionNoOpinion,
-				},
-				{
-					ctx: genericapirequest.WithUser(context.Background(), &user.DefaultInfo{
-						Name: "pod-reader",
-						Groups: []string{
-							"system:authenticated",
-						},
-					}),
-					ar: authorizer.AttributesRecord{
-						Verb:            "list",
-						Resource:        "pods",
-						APIGroup:        "",
-						APIVersion:      "v1",
-						Namespace:       "pod-namespace",
-						Subresource:     "",
-						ResourceRequest: true,
-						Name:            "",
-						User: &user.DefaultInfo{
-							Name: "bob",
-							Groups: []string{
-								"system:authenticated",
-							},
-						},
-					},
-					expected: authorizer.DecisionNoOpinion,
-				},
-			},
-		},
-		{
-			bootstrapRoles: bootstrapRoles{
-				clusterRoles: []rbacapi.ClusterRole{
-					{
-						ObjectMeta: metav1.ObjectMeta{
-							Name: "read-pods",
-						},
-						Rules: []rbacapi.PolicyRule{ruleReadPods},
-					},
-				},
-				clusterRoleBindings: []rbacapi.ClusterRoleBinding{
-					{
-						ObjectMeta: metav1.ObjectMeta{
+	// Tests itself is bit oververbose and each case creates its own objects.
+	// This makes readability bit easier over trying to overoptimize test case.
 
-							Name: "read-pods"},
-						Subjects: []rbacapi.Subject{
-							{Kind: "User", Name: "pod-reader"},
-						},
-						RoleRef: rbacapi.RoleRef{
-							Kind: "ClusterRole",
-							Name: "read-pods",
-						},
-					},
-				},
+	// Case 1: clusterrole+clusterbinding
+	// should allow cluster-scoped request
+	// should allow namespace-scoped request in any namespace
+	// should disallow request for resource not in rules
+	{
+		roles.clusterRoles = append(roles.clusterRoles, rbacapi.ClusterRole{
+			ObjectMeta: metav1.ObjectMeta{Name: "c1-clusterrole"},
+			Rules:      []rbacapi.PolicyRule{ruleReadPods},
+		})
+		roles.clusterRoleBindings = append(roles.clusterRoleBindings, rbacapi.ClusterRoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: "c1-clusterrolebinding"},
+			Subjects:   []rbacapi.Subject{{Kind: "User", Name: "c1-user"}},
+			RoleRef:    rbacapi.RoleRef{Kind: "ClusterRole", Name: "c1-clusterrole"},
+		})
+
+		user := &user.DefaultInfo{Name: "c1-user"}
+		testcases = append(testcases, []authorizeRequest{
+			{
+				ar:       authorizer.AttributesRecord{Verb: "list", Resource: "pods", Namespace: "", ResourceRequest: true, User: user},
+				expected: authorizer.DecisionAllow,
 			},
-			authorizeRequests: []authorizeRequest{
-				{
-					ctx: context.Background(),
-					ar: authorizer.AttributesRecord{
-						Verb:            "list",
-						Resource:        "pods",
-						APIGroup:        "",
-						APIVersion:      "v1",
-						Namespace:       "pod-namespace",
-						Subresource:     "",
-						ResourceRequest: true,
-						Name:            "",
-						User: &user.DefaultInfo{
-							Name: "pod-reader",
-							Groups: []string{
-								"system:authenticated",
-							},
-						},
-					},
-					expected: authorizer.DecisionAllow,
-				},
-				{
-					ctx: context.Background(),
-					ar: authorizer.AttributesRecord{
-						Verb:            "list",
-						Resource:        "pods",
-						APIGroup:        "",
-						APIVersion:      "v1",
-						Namespace:       "pod-namespace",
-						Subresource:     "",
-						ResourceRequest: true,
-						Name:            "",
-						User: &user.DefaultInfo{
-							Name: "bob",
-							Groups: []string{
-								"system:authenticated",
-							},
-						},
-					},
-					expected: authorizer.DecisionNoOpinion,
-				},
-				{
-					ctx: genericapirequest.WithUser(context.Background(), &user.DefaultInfo{
-						Name: "pod-reader",
-						Groups: []string{
-							"system:authenticated",
-						},
-					}),
-					ar: authorizer.AttributesRecord{
-						Verb:            "list",
-						Resource:        "pods",
-						APIGroup:        "",
-						APIVersion:      "v1",
-						Namespace:       "pod-namespace",
-						Subresource:     "",
-						ResourceRequest: true,
-						Name:            "",
-						User: &user.DefaultInfo{
-							Name: "bob",
-							Groups: []string{
-								"system:authenticated",
-							},
-						},
-					},
-					expected: authorizer.DecisionNoOpinion,
-				},
+			{
+				ar:       authorizer.AttributesRecord{Verb: "list", Resource: "pods", Namespace: validNamespace, ResourceRequest: true, User: user},
+				expected: authorizer.DecisionAllow,
 			},
-		},
+			{
+				ar:       authorizer.AttributesRecord{Verb: "list", Resource: "configmaps", Namespace: "", ResourceRequest: true, User: user},
+				expected: authorizer.DecisionNoOpinion,
+			},
+		}...,
+		)
 	}
 
-	for i, tc := range tests {
-		t.Run(fmt.Sprintf("case-%d", i), func(t *testing.T) {
-			authenticator := group.NewAuthenticatedGroupAdder(bearertoken.New(tokenfile.New(map[string]*user.DefaultInfo{
-				superUser:    {Name: "admin", Groups: []string{"system:masters"}},
-				"bob":        {Name: "bob"},
-				"pod-reader": {Name: "pod-reader"},
-			})))
-
-			var tearDownAuthorizerFn func()
-			defer func() {
-				if tearDownAuthorizerFn != nil {
-					tearDownAuthorizerFn()
-				}
-			}()
-			var rbacAuthz authorizer.Authorizer
-			_, kubeConfig, tearDownFn := framework.StartTestServer(context.Background(), t, framework.TestServerSetup{
-				ModifyServerRunOptions: func(opts *options.ServerRunOptions) {
-					// Disable ServiceAccount admission plugin as we don't have serviceaccount controller running.
-					// Also disable namespace lifecycle to workaroung the test limitation that first creates
-					// roles/rolebindings and only then creates corresponding namespaces.
-					opts.Admission.GenericAdmission.DisablePlugins = []string{"ServiceAccount", "NamespaceLifecycle"}
-					// Disable built-in authorizers
-					opts.Authorization.Modes = []string{"AlwaysDeny"}
-				},
-				ModifyServerConfig: func(config *controlplane.Config) {
-					// Append our custom test authenticator
-					config.ControlPlane.Generic.Authentication.Authenticator = unionauthn.New(config.ControlPlane.Generic.Authentication.Authenticator, authenticator)
-					// Append our custom test authorizer
-					rbacAuthz, tearDownAuthorizerFn = newRBACAuthorizer(t, config)
-					config.ControlPlane.Generic.Authorization.Authorizer = unionauthz.New(config.ControlPlane.Generic.Authorization.Authorizer, rbacAuthz)
-				},
-			})
-			defer tearDownFn()
-
-			// Bootstrap the API Server with the test case's initial roles.
-			superuserClient, _ := clientsetForToken(superUser, kubeConfig)
-			if err := tc.bootstrapRoles.bootstrap(superuserClient); err != nil {
-				t.Errorf("case %d: failed to apply initial roles: %v", i, err)
-				return
-			}
-
-			for _, ns := range []string{"pod-namespace", "forbidden-namespace"} {
-				_, err := superuserClient.CoreV1().Namespaces().Create(context.TODO(), &corev1.Namespace{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: ns,
-					},
-				}, metav1.CreateOptions{})
-				if err != nil {
-					t.Errorf("case %d: failed to create namespace: %v", i, err)
-					return
-				}
-			}
-
-			for j, r := range tc.authorizeRequests {
-				decision, _, err := rbacAuthz.Authorize(r.ctx, &r.ar)
-				if err != nil {
-					t.Errorf("case %d, req %d: unexpected error: %v", i, j, err)
-					return
-				}
-				if decision != r.expected {
-					t.Errorf("case %d, req %d: expected %v, got %v", i, j, r.expected, decision)
-				}
-			}
+	// case 2: clusterrole+rolebinding
+	// should disallow cluster-scoped request
+	// should allow namespace-scoped request in rolebinding namespace
+	// should disallow namespace-scoped request in other namespace
+	// should disallow request for resource not in rules
+	{
+		roles.clusterRoles = append(roles.clusterRoles, rbacapi.ClusterRole{
+			ObjectMeta: metav1.ObjectMeta{Name: "c2-clusterrole"},
+			Rules:      []rbacapi.PolicyRule{ruleReadPods},
 		})
+		roles.roleBindings = append(roles.roleBindings, rbacapi.RoleBinding{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "c2-rolebinding",
+				Namespace: validNamespace,
+			},
+			Subjects: []rbacapi.Subject{{Kind: "User", Name: "c2-user"}},
+			RoleRef:  rbacapi.RoleRef{Kind: "ClusterRole", Name: "c2-clusterrole"},
+		})
+
+		user := &user.DefaultInfo{Name: "c2-user"}
+		testcases = append(testcases, []authorizeRequest{
+			{
+				ar:       authorizer.AttributesRecord{Verb: "list", Resource: "pods", Namespace: "", ResourceRequest: true, User: user},
+				expected: authorizer.DecisionNoOpinion,
+			},
+			{
+				ar:       authorizer.AttributesRecord{Verb: "list", Resource: "pods", Namespace: validNamespace, ResourceRequest: true, User: user},
+				expected: authorizer.DecisionAllow,
+			},
+			{
+				ar:       authorizer.AttributesRecord{Verb: "list", Resource: "configmaps", Namespace: validNamespace, ResourceRequest: true, User: user},
+				expected: authorizer.DecisionNoOpinion,
+			},
+			{
+				ar:       authorizer.AttributesRecord{Verb: "list", Resource: "pods", Namespace: invalidNamespace, ResourceRequest: true, User: user},
+				expected: authorizer.DecisionNoOpinion,
+			},
+		}...,
+		)
+	}
+
+	// case 3: role+rolebinding
+	// should disallow cluster-scoped request
+	// should allow namespace-scoped request in rolebinding namespace
+	// should disallow namespace-scoped request in other namespace
+	// should disallow request for resource not in rules
+	{
+		roles.roles = append(roles.roles, rbacapi.Role{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "c3-role",
+				Namespace: validNamespace,
+			},
+			Rules: []rbacapi.PolicyRule{ruleReadPods},
+		})
+		roles.roleBindings = append(roles.roleBindings, rbacapi.RoleBinding{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "c3-rolebinding",
+				Namespace: validNamespace,
+			},
+			Subjects: []rbacapi.Subject{{Kind: "User", Name: "c3-user"}},
+			RoleRef:  rbacapi.RoleRef{Kind: "Role", Name: "c3-role"},
+		})
+
+		user := &user.DefaultInfo{Name: "c3-user"}
+		testcases = append(testcases, []authorizeRequest{
+			{
+				ar:       authorizer.AttributesRecord{Verb: "list", Resource: "pods", Namespace: "", ResourceRequest: true, User: user},
+				expected: authorizer.DecisionNoOpinion,
+			},
+			{
+				ar:       authorizer.AttributesRecord{Verb: "list", Resource: "pods", Namespace: validNamespace, ResourceRequest: true, User: user},
+				expected: authorizer.DecisionAllow,
+			},
+			{
+				ar:       authorizer.AttributesRecord{Verb: "list", Resource: "configmaps", Namespace: validNamespace, ResourceRequest: true, User: user},
+				expected: authorizer.DecisionNoOpinion,
+			},
+			{
+				ar:       authorizer.AttributesRecord{Verb: "list", Resource: "pods", Namespace: invalidNamespace, ResourceRequest: true, User: user},
+				expected: authorizer.DecisionNoOpinion,
+			},
+		}...,
+		)
+	}
+
+	authenticator := group.NewAuthenticatedGroupAdder(bearertoken.New(tokenfile.New(map[string]*user.DefaultInfo{
+		superUser: {Name: "admin", Groups: []string{"system:masters"}},
+	})))
+
+	var tearDownAuthorizerFn func()
+	defer func() {
+		if tearDownAuthorizerFn != nil {
+			tearDownAuthorizerFn()
+		}
+	}()
+	var rbacAuthz authorizer.Authorizer
+	_, kubeConfig, tearDownFn := framework.StartTestServer(context.Background(), t, framework.TestServerSetup{
+		ModifyServerRunOptions: func(opts *options.ServerRunOptions) {
+			// Disable ServiceAccount admission plugin as we don't have serviceaccount controller running.
+			// Also disable namespace lifecycle to workaroung the test limitation that first creates
+			// roles/rolebindings and only then creates corresponding namespaces.
+			opts.Admission.GenericAdmission.DisablePlugins = []string{"ServiceAccount", "NamespaceLifecycle"}
+			// Disable built-in authorizers
+			opts.Authorization.Modes = []string{"AlwaysDeny"}
+		},
+		ModifyServerConfig: func(config *controlplane.Config) {
+			// Append our custom test authenticator
+			config.ControlPlane.Generic.Authentication.Authenticator = unionauthn.New(config.ControlPlane.Generic.Authentication.Authenticator, authenticator)
+			// Append our custom test authorizer
+			rbacAuthz, tearDownAuthorizerFn = newRBACAuthorizer(t, config)
+			config.ControlPlane.Generic.Authorization.Authorizer = unionauthz.New(config.ControlPlane.Generic.Authorization.Authorizer, rbacAuthz)
+		},
+	})
+	defer tearDownFn()
+
+	// Bootstrap the API Server with the test case's initial roles.
+	superuserClient, _ := clientsetForToken(superUser, kubeConfig)
+	if err := roles.bootstrap(superuserClient); err != nil {
+		t.Errorf("failed to apply initial roles: %v", err)
+		return
+	}
+
+	for _, ns := range []string{validNamespace, invalidNamespace} {
+		_, err := superuserClient.CoreV1().Namespaces().Create(context.TODO(), &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: ns,
+			},
+		}, metav1.CreateOptions{})
+		if err != nil {
+			t.Errorf("failed to create namespace: %v", err)
+			return
+		}
+	}
+
+	// 3 cases shared for all test cases:
+	// 1. Default context
+	// 2. Empty namespace
+	// 3. Invalid namespace in the context
+	for j, r := range testcases {
+		ctx := context.Background()
+		// 1. Default context
+		if decision, _, err := rbacAuthz.Authorize(ctx, &r.ar); err != nil {
+			t.Errorf("req %d: unexpected error: %v", j, err)
+			return
+		} else if decision != r.expected {
+			t.Errorf("req %d: expected %v, got %v", j, r.expected, decision)
+		}
+		// 2. Empty namespace
+		if decision, _, err := rbacAuthz.Authorize(genericapirequest.WithNamespace(ctx, ""), &r.ar); err != nil {
+			t.Errorf("req %d: unexpected error: %v", j, err)
+			return
+		} else if decision != r.expected {
+			t.Errorf("req %d: expected %v, got %v", j, r.expected, decision)
+		}
+		// 3. Invalid namespace in the context
+		if decision, _, err := rbacAuthz.Authorize(genericapirequest.WithNamespace(ctx, invalidNamespace), &r.ar); err != nil {
+			t.Errorf("req %d: unexpected error: %v", j, err)
+			return
+		} else if decision != r.expected {
+			t.Errorf("req %d: expected %v, got %v", j, r.expected, decision)
+		}
+
 	}
 }

@@ -31,6 +31,7 @@ import (
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
+	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 )
 
 // unionAuthzHandler authorizer against a chain of authorizer.Authorizer
@@ -86,7 +87,7 @@ func (authzHandler unionAuthzRulesHandler) RulesFor(ctx context.Context, user us
 	incompleteStatus := false
 
 	for _, currAuthzHandler := range authzHandler {
-		resourceRules, nonResourceRules, incomplete, err := currAuthzHandler.RulesFor(ctx, user, namespace)
+		resourceRules, nonResourceRules, incomplete, err := currAuthzHandler.RulesFor(genericapirequest.WithNamespace(ctx, ""), user, namespace)
 
 		if incomplete {
 			incompleteStatus = true

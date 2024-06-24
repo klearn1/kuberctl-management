@@ -279,9 +279,21 @@ func TestRoundtripToUnstructured(t *testing.T) {
 					t.Fatalf("error decoding cbor to unstructured: %v, diag: %s", err, diag)
 				}
 
-				// original->JSON->Unstructured == original->CBOR->Unstructured
-				if !apiequality.Semantic.DeepEqual(uJSON, uCBOR) {
-					t.Fatalf("unstructured via json differed from unstructured via cbor: %v", cmp.Diff(uJSON, uCBOR))
+				// original->CBOR(nondeterministic)->Unstructured
+				buf.Reset()
+				if err := cborSerializer.EncodeNondeterministic(item, &buf); err != nil {
+					t.Fatalf("error encoding native to cbor: %v", err)
+				}
+				var uCBORNondeterministic runtime.Object = &metaunstruct.Unstructured{}
+				uCBORNondeterministic, _, err = cborSerializer.Decode(buf.Bytes(), &gvk, uCBORNondeterministic)
+				if err != nil {
+					diag, _ := cbor.Diagnose(buf.Bytes())
+					t.Fatalf("error decoding cbor to unstructured: %v, diag: %s", err, diag)
+				}
+
+				// original->CBOR->Unstructured == original->CBOR(nondeterministic)->Unstructured
+				if !apiequality.Semantic.DeepEqual(uCBOR, uCBORNondeterministic) {
+					t.Fatalf("unstructured via nondeterministic cbor differed from unstructured via cbor: %v", cmp.Diff(uCBOR, uCBORNondeterministic))
 				}
 
 				// original->JSON/CBOR->Unstructured == original->JSON/CBOR->Unstructured->JSON->Unstructured
@@ -313,6 +325,21 @@ func TestRoundtripToUnstructured(t *testing.T) {
 					t.Errorf("object changed during native-cbor-unstructured-cbor-unstructured roundtrip, diff: %s", cmp.Diff(uCBOR, uCBOR2))
 				}
 
+				// original->JSON/CBOR->Unstructured->CBOR->Unstructured == original->JSON/CBOR->Unstructured->CBOR(nondeterministic)->Unstructured
+				buf.Reset()
+				if err := cborSerializer.EncodeNondeterministic(uCBOR, &buf); err != nil {
+					t.Fatalf("error encoding unstructured to cbor: %v", err)
+				}
+				var uCBOR2Nondeterministic runtime.Object = &metaunstruct.Unstructured{}
+				uCBOR2Nondeterministic, _, err = cborSerializer.Decode(buf.Bytes(), &gvk, uCBOR2Nondeterministic)
+				if err != nil {
+					diag, _ := cbor.Diagnose(buf.Bytes())
+					t.Fatalf("error decoding cbor to unstructured: %v, diag: %s", err, diag)
+				}
+				if !apiequality.Semantic.DeepEqual(uCBOR, uCBOR2Nondeterministic) {
+					t.Errorf("object changed during native-cbor-unstructured-cbor(nondeterministic)-unstructured roundtrip, diff: %s", cmp.Diff(uCBOR, uCBOR2Nondeterministic))
+				}
+
 				// original->JSON/CBOR->Unstructured->JSON->final == original
 				buf.Reset()
 				if err := jsonSerializer.Encode(uJSON, &buf); err != nil {
@@ -338,6 +365,20 @@ func TestRoundtripToUnstructured(t *testing.T) {
 				}
 				if !apiequality.Semantic.DeepEqual(item, finalCBOR) {
 					t.Errorf("object changed during native-cbor-unstructured-cbor-native roundtrip, diff: %s", cmp.Diff(item, finalCBOR))
+				}
+
+				// original->JSON/CBOR->Unstructured->CBOR(nondeterministic)->final == original
+				buf.Reset()
+				if err := cborSerializer.EncodeNondeterministic(uCBOR, &buf); err != nil {
+					t.Fatalf("error encoding unstructured to cbor: %v", err)
+				}
+				finalCBORNondeterministic, _, err := cborSerializer.Decode(buf.Bytes(), &gvk, nil)
+				if err != nil {
+					diag, _ := cbor.Diagnose(buf.Bytes())
+					t.Fatalf("error decoding cbor to native: %v, diag: %s", err, diag)
+				}
+				if !apiequality.Semantic.DeepEqual(item, finalCBORNondeterministic) {
+					t.Errorf("object changed during native-cbor-unstructured-cbor-native roundtrip, diff: %s", cmp.Diff(item, finalCBORNondeterministic))
 				}
 			}
 		})

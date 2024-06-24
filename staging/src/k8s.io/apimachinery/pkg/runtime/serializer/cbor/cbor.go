@@ -55,7 +55,14 @@ func (mf *defaultMetaFactory) Interpret(data []byte) (*schema.GroupVersionKind, 
 
 type Serializer interface {
 	runtime.Serializer
+	runtime.NondeterministicEncoder
 	recognizer.RecognizingDecoder
+
+	// NewSerializer returns a value of this interface type rather than exporting the serializer
+	// type and returning one of those because the zero value of serializer isn't ready to
+	// use. Users aren't intended to implement cbor.Serializer themselves, and this unexported
+	// interface method is here to prevent that (https://go.dev/blog/module-compatibility).
+	private()
 }
 
 var _ Serializer = &serializer{}
@@ -79,6 +86,8 @@ type serializer struct {
 	options     options
 }
 
+func (serializer) private() {}
+
 func NewSerializer(creater runtime.ObjectCreater, typer runtime.ObjectTyper, options ...Option) Serializer {
 	return newSerializer(&defaultMetaFactory{}, creater, typer, options...)
 }
@@ -101,6 +110,10 @@ func (s *serializer) Identifier() runtime.Identifier {
 
 func (s *serializer) Encode(obj runtime.Object, w io.Writer) error {
 	return s.encode(modes.Encode, obj, w)
+}
+
+func (s *serializer) EncodeNondeterministic(obj runtime.Object, w io.Writer) error {
+	return s.encode(modes.EncodeNondeterministic, obj, w)
 }
 
 func (s *serializer) encode(mode modes.EncMode, obj runtime.Object, w io.Writer) error {

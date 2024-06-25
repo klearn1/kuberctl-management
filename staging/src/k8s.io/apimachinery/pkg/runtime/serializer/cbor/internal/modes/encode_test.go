@@ -22,6 +22,8 @@ import (
 	"reflect"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/runtime/serializer/cbor/internal/modes"
+
 	"github.com/fxamacker/cbor/v2"
 	"github.com/google/go-cmp/cmp"
 )
@@ -29,7 +31,7 @@ import (
 func TestEncode(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
-		modes         []cbor.EncMode
+		modes         []modes.EncMode
 		in            interface{}
 		want          []byte
 		assertOnError func(t *testing.T, e error)

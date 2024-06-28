@@ -85,9 +85,9 @@ type CgroupManager interface {
 	// MemoryUsage returns current memory usage of the specified cgroup, as read from the cgroupfs.
 	MemoryUsage(name CgroupName) (int64, error)
 	// Get the resource config values applied to the cgroup for specified resource type
-	GetCgroupConfig(name CgroupName, resource v1.ResourceName) (*ResourceConfig, error)
+	GetCgroupConfig(name CgroupName) (*ResourceConfig, error)
 	// Set resource config for the specified resource type on the cgroup
-	SetCgroupConfig(name CgroupName, resource v1.ResourceName, resourceConfig *ResourceConfig) error
+	SetCgroupConfig(name CgroupName, resourceConfig *ResourceConfig) error
 }
 
 // QOSContainersInfo stores the names of containers per qos
@@ -128,8 +128,8 @@ type PodContainerManager interface {
 	GetPodCgroupMemoryUsage(pod *v1.Pod) (uint64, error)
 
 	// Get the resource config values applied to the pod cgroup for specified resource type
-	GetPodCgroupConfig(pod *v1.Pod, resource v1.ResourceName) (*ResourceConfig, error)
+	GetPodCgroupConfig(pod *v1.Pod) (*ResourceConfig, error)
 
 	// Set resource config values for the specified resource type on the pod cgroup
-	SetPodCgroupConfig(pod *v1.Pod, resource v1.ResourceName, resourceConfig *ResourceConfig) error
+	SetPodCgroupConfig(pod *v1.Pod, resourceConfig *ResourceConfig) error
 }

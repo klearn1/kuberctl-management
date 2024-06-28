@@ -97,11 +97,11 @@ func (cm *containerManagerStub) GetDevicePluginResourceCapacity() (v1.ResourceLi
 	return cm.extendedPluginResources, cm.extendedPluginResources, []string{}
 }
 
-func (m *podContainerManagerStub) GetPodCgroupConfig(_ *v1.Pod, _ v1.ResourceName) (*ResourceConfig, error) {
+func (m *podContainerManagerStub) GetPodCgroupConfig(_ *v1.Pod) (*ResourceConfig, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (m *podContainerManagerStub) SetPodCgroupConfig(_ *v1.Pod, _ v1.ResourceName, _ *ResourceConfig) error {
+func (m *podContainerManagerStub) SetPodCgroupConfig(pod *v1.Pod, resourceConfig *ResourceConfig) error {
 	return fmt.Errorf("not implemented")
 }
 

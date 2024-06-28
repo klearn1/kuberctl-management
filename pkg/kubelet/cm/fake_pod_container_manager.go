@@ -112,14 +112,14 @@ func (cm *FakePodContainerManager) GetPodCgroupMemoryUsage(_ *v1.Pod) (uint64, e
 	return 0, nil
 }
 
-func (cm *FakePodContainerManager) GetPodCgroupConfig(_ *v1.Pod, _ v1.ResourceName) (*ResourceConfig, error) {
+func (cm *FakePodContainerManager) GetPodCgroupConfig(_ *v1.Pod) (*ResourceConfig, error) {
 	cm.Lock()
 	defer cm.Unlock()
 	cm.CalledFunctions = append(cm.CalledFunctions, "GetPodCgroupConfig")
 	return nil, nil
 }
 
-func (cm *FakePodContainerManager) SetPodCgroupConfig(_ *v1.Pod, _ v1.ResourceName, _ *ResourceConfig) error {
+func (cm *FakePodContainerManager) SetPodCgroupConfig(pod *v1.Pod, resourceConfig *ResourceConfig) error {
 	cm.Lock()
 	defer cm.Unlock()
 	cm.CalledFunctions = append(cm.CalledFunctions, "SetPodCgroupConfig")

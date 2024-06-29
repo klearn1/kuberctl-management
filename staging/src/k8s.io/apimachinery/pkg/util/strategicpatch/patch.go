@@ -19,6 +19,7 @@ package strategicpatch
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 
@@ -222,7 +223,7 @@ func diffMaps(original, modified map[string]interface{}, schema LookupPatchMeta,
 	}
 
 	updatePatchIfMissing(original, modified, patch, diffOptions)
-	// Insert the retainKeysList iff there are values present in the retainKeysList and
+	// Insert the retainKeysList if there are values present in the retainKeysList and
 	// either of the following is true:
 	// - the patch is not empty
 	// - there are additional field in original that need to be cleared
@@ -718,78 +719,134 @@ func diffListsOfMaps(original, modified []interface{}, schema LookupPatchMeta, m
 	patch := make([]interface{}, 0, len(modified))
 	deletionList := make([]interface{}, 0, len(original))
 
-	originalSorted, err := sortMergeListsByNameArray(original, schema, mergeKey, false)
+	originalKeys, originalMap, err := getMergeListMergeElementsMapAndDistinctKeysList(original, schema, mergeKey)
 	if err != nil {
 		return nil, nil, err
 	}
-	modifiedSorted, err := sortMergeListsByNameArray(modified, schema, mergeKey, false)
+	modifiedKeys, modifiedMap, err := getMergeListMergeElementsMapAndDistinctKeysList(modified, schema, mergeKey)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	originalIndex, modifiedIndex := 0, 0
-	for {
-		originalInBounds := originalIndex < len(originalSorted)
-		modifiedInBounds := modifiedIndex < len(modifiedSorted)
-		bothInBounds := originalInBounds && modifiedInBounds
-		if !originalInBounds && !modifiedInBounds {
-			break
-		}
+	var originalElements, modifiedElements []map[string]interface{}
+	var modifiedFound bool
 
-		var originalElementMergeKeyValueString, modifiedElementMergeKeyValueString string
-		var originalElementMergeKeyValue, modifiedElementMergeKeyValue interface{}
-		var originalElement, modifiedElement map[string]interface{}
-		if originalInBounds {
-			originalElement, originalElementMergeKeyValue, err = getMapAndMergeKeyValueByIndex(originalIndex, mergeKey, originalSorted)
-			if err != nil {
-				return nil, nil, err
-			}
-			originalElementMergeKeyValueString = fmt.Sprintf("%v", originalElementMergeKeyValue)
-		}
-		if modifiedInBounds {
-			modifiedElement, modifiedElementMergeKeyValue, err = getMapAndMergeKeyValueByIndex(modifiedIndex, mergeKey, modifiedSorted)
-			if err != nil {
-				return nil, nil, err
-			}
-			modifiedElementMergeKeyValueString = fmt.Sprintf("%v", modifiedElementMergeKeyValue)
-		}
+	for _, originalKey := range originalKeys {
+		originalElements = originalMap[originalKey]
+		modifiedElements, modifiedFound = modifiedMap[originalKey]
 
 		switch {
-		case bothInBounds && ItemMatchesOriginalAndModifiedSlice(originalElementMergeKeyValueString, modifiedElementMergeKeyValueString):
-			// Merge key values are equal, so recurse
-			patchValue, err := diffMaps(originalElement, modifiedElement, schema, diffOptions)
+		// One original and one modified with equal merge key value, so recurse
+		case len(originalElements) == 1 && len(modifiedElements) == 1:
+			patchValue, err := diffMaps(originalElements[0], modifiedElements[0], schema, diffOptions)
 			if err != nil {
 				return nil, nil, err
 			}
 			if len(patchValue) > 0 {
-				patchValue[mergeKey] = modifiedElementMergeKeyValue
+				patchValue[mergeKey] = originalKey
 				patch = append(patch, patchValue)
 			}
-			originalIndex++
-			modifiedIndex++
-		// only modified is in bound
-		case !originalInBounds:
-			fallthrough
-		// modified has additional map
-		case bothInBounds && ItemAddedToModifiedSlice(originalElementMergeKeyValueString, modifiedElementMergeKeyValueString):
-			if !diffOptions.IgnoreChangesAndAdditions {
-				patch = append(patch, modifiedElement)
-			}
-			modifiedIndex++
-		// only original is in bound
-		case !modifiedInBounds:
-			fallthrough
-		// original has additional map
-		case bothInBounds && ItemRemovedFromModifiedSlice(originalElementMergeKeyValueString, modifiedElementMergeKeyValueString):
+		// No modified element with specified merge key value, so deleting
+		case !modifiedFound:
 			if !diffOptions.IgnoreDeletions {
 				// Item was deleted, so add delete directive
-				deletionList = append(deletionList, CreateDeleteDirective(mergeKey, originalElementMergeKeyValue))
+				deletionList = append(deletionList, CreateDeleteDirective(mergeKey, originalKey))
 			}
-			originalIndex++
+		// Both original and modified are found and have same count of elements. Check if all elements are equal
+		// and there is no need in patching
+		case len(originalElements) == len(modifiedElements):
+			allEqual := true
+			for _, originalElement := range originalElements {
+				hasEqual := false
+				for _, modifiedElement := range modifiedElements {
+					if reflect.DeepEqual(originalElement, modifiedElement) {
+						hasEqual = true
+						break
+					}
+				}
+				if !hasEqual {
+					allEqual = false
+					break
+				}
+			}
+
+			// Reverse check for case when one original equals to several modified
+			// and some modified do not have equal originals
+			for _, modifiedElement := range modifiedElements {
+				hasEqual := false
+				for _, originalElement := range originalElements {
+					if reflect.DeepEqual(originalElement, modifiedElement) {
+						hasEqual = true
+						break
+					}
+				}
+				if !hasEqual {
+					allEqual = false
+					break
+				}
+			}
+
+			if allEqual {
+				// Continue to the next originalKey value, objects with this key does not need patching
+				continue
+			}
+			// Not equal, so need patching
+			fallthrough
+		// Both original and modified are found but have different count of elements, which means no chance of exact
+		// equality of lists. The only way is to delete all existing for this mergeKey value and overwrite with modified
+		default:
+			if !diffOptions.IgnoreChangesAndAdditions {
+				for _, element := range modifiedElements {
+					patch = append(patch, element)
+				}
+			}
+		}
+	}
+
+	// Reverse check to create elements present in patched but not present in original
+	var originalFound bool
+	for _, modifiedKey := range modifiedKeys {
+		modifiedElements = modifiedMap[modifiedKey]
+		_, originalFound = originalMap[modifiedKey]
+
+		// ignoring if found, we already processed it
+		// if not found, elements should be created
+		if !originalFound {
+			if !diffOptions.IgnoreChangesAndAdditions {
+				for _, element := range modifiedElements {
+					patch = append(patch, element)
+				}
+			}
 		}
 	}
 
 	return patch, deletionList, nil
+}
+
+// getMergeListMergeElementsMapAndDistinctKeysList returns slice of distinct mergeKey values ordered same way as in
+// elements slice and map of mergeKey value to slice of matching elements
+func getMergeListMergeElementsMapAndDistinctKeysList(elements []interface{}, schema LookupPatchMeta, mergeKey string,
+) ([]interface{}, map[interface{}][]map[string]interface{}, error) {
+	sorted, err := sortMergeListsByNameArray(elements, schema, mergeKey, false)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	keys := make([]interface{}, 0, len(sorted))
+	elementsMap := make(map[interface{}][]map[string]interface{}, len(sorted))
+
+	for i := range sorted {
+		element, elementMergeKeyValue, err := getMapAndMergeKeyValueByIndex(i, mergeKey, sorted)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !slices.Contains(keys, elementMergeKeyValue) {
+			keys = append(keys, elementMergeKeyValue)
+		}
+		elementsMap[elementMergeKeyValue] = append(elementsMap[elementMergeKeyValue], element)
+	}
+
+	return keys, elementsMap, nil
 }
 
 // getMapAndMergeKeyValueByIndex return a map in the list and its merge key value given the index of the map.
@@ -1550,6 +1607,10 @@ func mergeSlice(original, patch []interface{}, schema LookupPatchMeta, mergeKey 
 func mergeSliceWithSpecialElements(original, patch []interface{}, mergeKey string) ([]interface{}, []interface{}, error) {
 	patchWithoutSpecialElements := []interface{}{}
 	replace := false
+	// copy to avoid side effects on original slice. It could affect ordering in mergePatchIntoOriginal otherwise
+	originalCopy := make([]interface{}, len(original))
+	copy(originalCopy, original)
+
 	for _, v := range patch {
 		typedV := v.(map[string]interface{})
 		patchType, ok := typedV[directiveMarker]
@@ -1561,7 +1622,7 @@ func mergeSliceWithSpecialElements(original, patch []interface{}, mergeKey strin
 				mergeValue, ok := typedV[mergeKey]
 				if ok {
 					var err error
-					original, err = deleteMatchingEntries(original, mergeKey, mergeValue)
+					originalCopy, err = deleteMatchingEntries(originalCopy, mergeKey, mergeValue)
 					if err != nil {
 						return nil, nil, err
 					}
@@ -1581,7 +1642,7 @@ func mergeSliceWithSpecialElements(original, patch []interface{}, mergeKey strin
 	if replace {
 		return patchWithoutSpecialElements, nil, nil
 	}
-	return original, patchWithoutSpecialElements, nil
+	return originalCopy, patchWithoutSpecialElements, nil
 }
 
 // delete all matching entries (based on merge key) from a merging list
@@ -1604,35 +1665,49 @@ func deleteMatchingEntries(original []interface{}, mergeKey string, mergeValue i
 // mergeSliceWithoutSpecialElements merges slices with non-special elements.
 // original and patch must be slices of maps, they should be checked before calling this function.
 func mergeSliceWithoutSpecialElements(original, patch []interface{}, mergeKey string, schema LookupPatchMeta, mergeOptions MergeOptions) ([]interface{}, error) {
-	for _, v := range patch {
-		typedV := v.(map[string]interface{})
-		mergeValue, ok := typedV[mergeKey]
-		if !ok {
-			return nil, mergepatch.ErrNoMergeKey(typedV, mergeKey)
-		}
+	// Representing original and patch as maps. Its more reliable representation for mergeKey behavior.
+	originalKeys, originalMap, err := getMergeListMergeElementsMapAndDistinctKeysList(original, schema, mergeKey)
+	if err != nil {
+		return nil, err
+	}
+	patchKeys, patchMap, err := getMergeListMergeElementsMapAndDistinctKeysList(patch, schema, mergeKey)
+	if err != nil {
+		return nil, err
+	}
 
-		// If we find a value with this merge key value in original, merge the
-		// maps. Otherwise append onto original.
-		originalMap, originalKey, found, err := findMapInSliceBasedOnKeyValue(original, mergeKey, mergeValue)
-		if err != nil {
-			return nil, err
-		}
-
-		if found {
-			var mergedMaps interface{}
-			var err error
-			// Merge into original.
-			mergedMaps, err = mergeMap(originalMap, typedV, schema, mergeOptions)
+	for mergeValue, patchElements := range patchMap {
+		// Can consistently merge only if we have one original and one patch elements provided.
+		// If we have duplicates there is no way to strictly determine which original should be patched with which
+		// patch, so in this case we replace original(s) with patch value(s).
+		originalElements := originalMap[mergeValue]
+		if len(originalElements) == 1 && len(patchElements) == 1 {
+			merged, err := mergeMap(originalElements[0], patchElements[0], schema, mergeOptions)
 			if err != nil {
 				return nil, err
 			}
-
-			original[originalKey] = mergedMaps
+			originalMap[mergeValue][0] = merged
 		} else {
-			original = append(original, v)
+			originalMap[mergeValue] = patchElements
 		}
 	}
-	return original, nil
+
+	// save original keys order and append new keys to the end of result slice
+	result := make([]interface{}, 0, len(original))
+	for _, originalKey := range originalKeys {
+		for _, originalElement := range originalMap[originalKey] {
+			result = append(result, originalElement)
+		}
+	}
+	for _, patchKey := range patchKeys {
+		if slices.Contains(originalKeys, patchKey) {
+			continue
+		}
+		for _, resultElement := range originalMap[patchKey] {
+			result = append(result, resultElement)
+		}
+	}
+
+	return result, nil
 }
 
 // deleteFromSlice uses the parallel list to delete the items in a list of scalars

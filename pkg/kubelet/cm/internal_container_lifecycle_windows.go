@@ -24,27 +24,37 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
 	"k8s.io/klog/v2"
-	"strconv"
+	"k8s.io/kubernetes/pkg/kubelet/winstats"
 )
 
 func (i *internalContainerLifecycleImpl) PreCreateContainer(pod *v1.Pod, container *v1.Container, containerConfig *runtimeapi.ContainerConfig) error {
+	klog.Info("PreCreateContainer for Windows")
 	if i.cpuManager != nil {
 		allocatedCPUs := i.cpuManager.GetCPUAffinity(string(pod.UID), container.Name)
 		if !allocatedCPUs.IsEmpty() {
-			klog.Info("Setting CPU affinity for container")
-			//containerConfig.Windows.Resources.affinity_cpus = allocatedCPUs.String()
+			klog.Info("Setting CPU affinity for container %q cpus %v", container.Name, allocatedCPUs.String())
+			var cpuGroupAffinities []*runtimeapi.WindowsCpuGroupAffinity
+			affinities := winstats.CpusToGroupAffinity(allocatedCPUs.List())
+			for _, affinity := range affinities {
+				cpuGroupAffinities = append(cpuGroupAffinities, &runtimeapi.WindowsCpuGroupAffinity{
+					CpuGroup: uint32(affinity.Group),
+					CpuMask:  uint64(affinity.Mask),
+				})
+			}
+
+			containerConfig.Windows.Resources.AffinityCpus = cpuGroupAffinities
 		}
 	}
 
 	if i.memoryManager != nil {
 		numaNodes := i.memoryManager.GetMemoryNUMANodes(pod, container)
 		if numaNodes.Len() > 0 {
-			var affinity []string
+			var affinity []int64
 			for _, numaNode := range sets.List(numaNodes) {
-				affinity = append(affinity, strconv.Itoa(numaNode))
+				affinity = append(affinity, int64(numaNode))
 			}
 			klog.Info("Setting memory NUMA nodes for container")
-			// containerConfig.Windows.Resources.affinity_mems = strings.Join(affinity, ",")
+			containerConfig.Windows.Resources.AffinityPrefferedNumaNodes = affinity
 		}
 	}
 	return nil

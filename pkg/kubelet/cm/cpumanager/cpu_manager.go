@@ -19,6 +19,7 @@ package cpumanager
 import (
 	"context"
 	"fmt"
+	"k8s.io/kubernetes/pkg/kubelet/winstats"
 	"math"
 	"runtime"
 	"sync"
@@ -519,12 +520,21 @@ func (m *manager) updateContainerCPUSet(ctx context.Context, containerID string,
 
 	//TODO something like this when https://github.com/kubernetes/kubernetes/pull/124285/files comes along
 	if runtime.GOOS == "windows" {
-		klog.Info("Updating CPU affinity")
-		//	return m.containerRuntime.UpdateContainerResources(ctx, containerID, &runtimeapi.ContainerResources{
-		//		Windows: &runtimeapi.WindowsContainerResources{
-		//			affinity_cpus: cpus.String(),
-		//		}
-		//	}
+		klog.Info("Updating windows CPU affinity")
+
+		affinities := winstats.CpusToGroupAffinity(cpus.List())
+		var cpuGroupAffinities []*runtimeapi.WindowsCpuGroupAffinity
+		for _, affinity := range affinities {
+			cpuGroupAffinities = append(cpuGroupAffinities, &runtimeapi.WindowsCpuGroupAffinity{
+				CpuGroup: uint32(affinity.Group),
+				CpuMask:  uint64(affinity.Mask),
+			})
+		}
+		return m.containerRuntime.UpdateContainerResources(ctx, containerID, &runtimeapi.ContainerResources{
+			Windows: &runtimeapi.WindowsContainerResources{
+				AffinityCpus: cpuGroupAffinities,
+			},
+		})
 	}
 	return m.containerRuntime.UpdateContainerResources(
 		ctx,

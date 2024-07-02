@@ -47,6 +47,34 @@ type GROUP_AFFINITY struct {
 	Reserved [3]uint16
 }
 
+func (a GROUP_AFFINITY) Processors() []int {
+	processors := []int{}
+	for i := 0; i < 64; i++ {
+		if a.Mask&(1<<i) != 0 {
+			processors = append(processors, i+(int(a.Group)*64))
+		}
+	}
+	return processors
+}
+
+func CpusToGroupAffinity(cpus []int) map[int]*GROUP_AFFINITY {
+	groupAffinities := make(map[int]*GROUP_AFFINITY)
+	for _, cpu := range cpus {
+		group := uint16(cpu / 64)
+
+		groupaffinity, ok := groupAffinities[int(group)]
+		if !ok {
+			groupaffinity = &GROUP_AFFINITY{
+				Group: group,
+			}
+			groupAffinities[int(group)] = groupaffinity
+		}
+		mask := uintptr(1 << (cpu % 64))
+		groupaffinity.Mask |= mask
+	}
+	return groupAffinities
+}
+
 type NUMA_NODE_RELATIONSHIP struct {
 	NodeNumber uint32
 	Reserved   [18]byte
@@ -144,20 +172,18 @@ func processorInfo(relationShip RelationType) (int, int, []cadvisorapi.Node, err
 			}
 
 			//iterate over group masks and add each processor to the map
-			for groupNum, groupMask := range groupMasks {
-				for i := 0; i < 64; i++ {
-					if groupMask.Mask&(1<<i) != 0 {
-						p, ok := processors[i*(groupNum+1)]
-						if !ok {
-							p = &processor{}
-							processors[i*(groupNum+1)] = p
-						}
-						if RelationProcessorCore == (RelationType)(info.Relationship) {
-							p.CoreID = numOfcores
-						}
-						if RelationProcessorPackage == (RelationType)(info.Relationship) {
-							p.SocektID = numofSockets
-						}
+			for _, groupMask := range groupMasks {
+				for processorId := range groupMask.Processors() {
+					p, ok := processors[processorId]
+					if !ok {
+						p = &processor{}
+						processors[processorId] = p
+					}
+					if RelationProcessorCore == (RelationType)(info.Relationship) {
+						p.CoreID = numOfcores
+					}
+					if RelationProcessorPackage == (RelationType)(info.Relationship) {
+						p.SocektID = numofSockets
 					}
 				}
 			}
@@ -171,16 +197,14 @@ func processorInfo(relationShip RelationType) (int, int, []cadvisorapi.Node, err
 
 			nodes = append(nodes, cadvisorapi.Node{Id: int(numaNodeRelationship.NodeNumber)})
 
-			for groupNum, groupMask := range groupMasks {
-				for i := 0; i < 64; i++ {
-					if groupMask.Mask&(1<<i) != 0 {
-						p, ok := processors[i*(groupNum+1)]
-						if !ok {
-							p = &processor{}
-							processors[i*(groupNum+1)] = p
-						}
-						p.NodeID = int(numaNodeRelationship.NodeNumber)
+			for _, groupMask := range groupMasks {
+				for processorId := range groupMask.Processors() {
+					p, ok := processors[processorId]
+					if !ok {
+						p = &processor{}
+						processors[processorId] = p
 					}
+					p.NodeID = int(numaNodeRelationship.NodeNumber)
 				}
 			}
 
@@ -197,7 +221,7 @@ func processorInfo(relationShip RelationType) (int, int, []cadvisorapi.Node, err
 	}
 
 	for processId, p := range processors {
-		klog.V(4).Infof("Processor (%s): %v", processId, p)
+		klog.V(4).Infof("Processor (%d): %v", processId, p)
 		node := nodes[p.NodeID]
 		if node.Id != p.NodeID {
 			return 0, 0, nil, fmt.Errorf("Node ID mismatch: %d != %d", node.Id, p.NodeID)

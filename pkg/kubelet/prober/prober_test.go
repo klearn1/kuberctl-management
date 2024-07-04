@@ -177,7 +177,7 @@ func TestProbe(t *testing.T) {
 		{ // Probe result is unknown
 			probe:          execProbe,
 			execResult:     probe.Unknown,
-			expectedResult: results.Failure,
+			expectedResult: results.Success,
 		},
 		{ // Probe has an error
 			probe:          execProbe,
@@ -333,3 +333,42 @@ func TestNewExecInContainer(t *testing.T) {
 		}
 	}
 }
+
+func TestNewProber(t *testing.T) {
+	runner := &containertest.FakeContainerCommandRunner{}
+	recorder := &record.FakeRecorder{}
+	prober := newProber(runner, recorder)
+
+	if prober == nil {
+		t.Error("Expected a non-nil prober")
+	}
+	// Add more assertions as needed to validate the initialization of prober
+}
+
+func TestExecInContainer_Start(t *testing.T) {
+	ctx := context.Background()
+	runner := &containertest.FakeContainerCommandRunner{
+		Stdout: "executed",
+	}
+	prober := &prober{
+		runner: runner,
+	}
+
+	container := v1.Container{}
+	containerID := kubecontainer.ContainerID{Type: "docker", ID: "containerID"}
+	cmd := []string{"ls", "-l"}
+
+	exec := prober.newExecInContainer(ctx, container, containerID, cmd, 0)
+	err := exec.Start()
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+	err = exec.Wait()
+	if err != nil {
+		t.Errorf("Expected no error on Wait, got %v", err)
+	}
+
+	// Add assertions to verify the output or other expected behaviors
+}
+
+

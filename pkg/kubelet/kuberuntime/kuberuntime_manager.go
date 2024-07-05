@@ -1025,6 +1025,32 @@ func (m *kubeGenericRuntimeManager) computePodActions(ctx context.Context, pod *
 		klog.V(2).InfoS("Message for Container of pod", "containerName", container.Name, "containerStatusID", containerStatus.ID, "pod", klog.KObj(pod), "containerMessage", message)
 	}
 
+	// Restart running sidecar containers which have had their definition changed.
+	if utilfeature.DefaultFeatureGate.Enabled(features.SidecarContainers) {
+		var message string
+		var reason containerKillReason
+		for idx, container := range pod.Spec.InitContainers {
+			containerStatus := podStatus.FindContainerStatusByName(container.Name)
+
+			if !types.IsRestartableInitContainer(&container) || containerStatus == nil || containerStatus.State != kubecontainer.ContainerStateRunning {
+				continue
+			}
+			if _, _, changed := containerChanged(&container, containerStatus); changed {
+				message = fmt.Sprintf("Container %s definition changed", container.Name)
+				message = fmt.Sprintf("%s, will be restarted", message)
+				changes.InitContainersToStart = append(changes.InitContainersToStart, idx)
+
+				changes.ContainersToKill[containerStatus.ID] = containerToKillInfo{
+					name:      containerStatus.Name,
+					container: &pod.Spec.InitContainers[idx],
+					message:   message,
+					reason:    reason,
+				}
+				klog.V(2).InfoS("Message for Container of pod", "containerName", container.Name, "containerStatusID", containerStatus.ID, "pod", klog.KObj(pod), "containerMessage", message)
+			}
+		}
+	}
+
 	if keepCount == 0 && len(changes.ContainersToStart) == 0 {
 		changes.KillPod = true
 		if utilfeature.DefaultFeatureGate.Enabled(features.SidecarContainers) {

@@ -104,7 +104,8 @@ func DoHTTPProbe(req *http.Request, client GetHTTPInterface) (probe.Result, stri
 		if err == utilio.ErrLimitReached {
 			klog.V(4).Infof("Non fatal body truncation for %s, Response: %v", url.String(), *res)
 		} else {
-			return probe.Failure, "", err
+			// Convert errors into failures to catch timeouts.
+			return probe.Failure, err.Error(), nil
 		}
 	}
 	body := string(b)

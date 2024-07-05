@@ -28,6 +28,7 @@ import (
 	"testing"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.etcd.io/etcd/client/v3/kubernetes"
 	"go.etcd.io/etcd/server/v3/embed"
 	"google.golang.org/grpc/grpclog"
 
@@ -93,7 +94,7 @@ func checkStorageInvariants(etcdClient *clientv3.Client, codec runtime.Codec) st
 
 func TestCreate(t *testing.T) {
 	ctx, store, etcdClient := testSetup(t)
-	storagetesting.RunTestCreate(ctx, t, store, checkStorageInvariants(etcdClient, store.codec))
+	storagetesting.RunTestCreate(ctx, t, store, checkStorageInvariants(etcdClient.Client, store.codec))
 }
 
 func TestCreateWithTTL(t *testing.T) {
@@ -163,7 +164,7 @@ func TestPreconditionalDeleteWithSuggestionPass(t *testing.T) {
 
 func TestGetListNonRecursive(t *testing.T) {
 	ctx, store, client := testSetup(t)
-	storagetesting.RunTestGetListNonRecursive(ctx, t, compactStorage(client), store)
+	storagetesting.RunTestGetListNonRecursive(ctx, t, compactStorage(client.Client), store)
 }
 
 func TestGetListRecursivePrefix(t *testing.T) {
@@ -187,8 +188,8 @@ func (s *storeWithPrefixTransformer) UpdatePrefixTransformer(modifier storagetes
 }
 
 func TestGuaranteedUpdate(t *testing.T) {
-	ctx, store, etcdClient := testSetup(t)
-	storagetesting.RunTestGuaranteedUpdate(ctx, t, &storeWithPrefixTransformer{store}, checkStorageInvariants(etcdClient, store.codec))
+	ctx, store, client := testSetup(t)
+	storagetesting.RunTestGuaranteedUpdate(ctx, t, &storeWithPrefixTransformer{store}, checkStorageInvariants(client.Client, store.codec))
 }
 
 func TestGuaranteedUpdateWithTTL(t *testing.T) {
@@ -218,12 +219,12 @@ func TestTransformationFailure(t *testing.T) {
 
 func TestList(t *testing.T) {
 	ctx, store, client := testSetup(t)
-	storagetesting.RunTestList(ctx, t, store, compactStorage(client), false)
+	storagetesting.RunTestList(ctx, t, store, compactStorage(client.Client), false)
 }
 
 func TestConsistentList(t *testing.T) {
 	ctx, store, client := testSetup(t)
-	storagetesting.RunTestConsistentList(ctx, t, store, compactStorage(client), false, true)
+	storagetesting.RunTestConsistentList(ctx, t, store, compactStorage(client.Client), false, true)
 }
 
 func checkStorageCallsInvariants(transformer *storagetesting.PrefixTransformer, recorder *clientRecorder) storagetesting.CallsValidation {
@@ -251,29 +252,29 @@ func checkStorageCallsInvariants(transformer *storagetesting.PrefixTransformer, 
 			}
 		}
 		if reads := recorder.GetReadsAndReset(); reads != estimatedGetCalls {
-			t.Errorf("unexpected reads: %d", reads)
+			t.Fatalf("unexpected reads: %d, want: %d", reads, estimatedGetCalls)
 		}
 	}
 }
 
 func TestListContinuation(t *testing.T) {
-	ctx, store, etcdClient := testSetup(t, withRecorder())
+	ctx, store, client := testSetup(t, withRecorder())
 	validation := checkStorageCallsInvariants(
-		store.transformer.(*storagetesting.PrefixTransformer), etcdClient.KV.(*clientRecorder))
+		store.transformer.(*storagetesting.PrefixTransformer), client.Kubernetes.(*clientKubernetesRecorder).clientRecorder)
 	storagetesting.RunTestListContinuation(ctx, t, store, validation)
 }
 
 func TestListPaginationRareObject(t *testing.T) {
-	ctx, store, etcdClient := testSetup(t, withRecorder())
+	ctx, store, client := testSetup(t, withRecorder())
 	validation := checkStorageCallsInvariants(
-		store.transformer.(*storagetesting.PrefixTransformer), etcdClient.KV.(*clientRecorder))
+		store.transformer.(*storagetesting.PrefixTransformer), client.Kubernetes.(*clientKubernetesRecorder).clientRecorder)
 	storagetesting.RunTestListPaginationRareObject(ctx, t, store, validation)
 }
 
 func TestListContinuationWithFilter(t *testing.T) {
-	ctx, store, etcdClient := testSetup(t, withRecorder())
+	ctx, store, client := testSetup(t, withRecorder())
 	validation := checkStorageCallsInvariants(
-		store.transformer.(*storagetesting.PrefixTransformer), etcdClient.KV.(*clientRecorder))
+		store.transformer.(*storagetesting.PrefixTransformer), client.Kubernetes.(*clientKubernetesRecorder).clientRecorder)
 	storagetesting.RunTestListContinuationWithFilter(ctx, t, store, validation)
 }
 
@@ -292,7 +293,7 @@ func compactStorage(etcdClient *clientv3.Client) storagetesting.Compaction {
 
 func TestListInconsistentContinuation(t *testing.T) {
 	ctx, store, client := testSetup(t)
-	storagetesting.RunTestListInconsistentContinuation(ctx, t, store, compactStorage(client))
+	storagetesting.RunTestListInconsistentContinuation(ctx, t, store, compactStorage(client.Client))
 }
 
 func TestListResourceVersionMatch(t *testing.T) {
@@ -477,22 +478,50 @@ func newTestTransformer() value.Transformer {
 	return storagetesting.NewPrefixTransformer([]byte(defaultTestPrefix), false)
 }
 
-type clientRecorder struct {
-	reads uint64
-	clientv3.KV
+func newClientRecorder(client *kubernetes.Client) *clientRecorder {
+	r := &clientRecorder{}
+	r.Kubernetes = &clientKubernetesRecorder{clientRecorder: r, Interface: client.Kubernetes}
+	r.Client = &clientKVRecorder{clientRecorder: r, KV: client.Client.KV}
+	return r
 }
 
-func (r *clientRecorder) Get(ctx context.Context, key string, opts ...clientv3.OpOption) (*clientv3.GetResponse, error) {
-	atomic.AddUint64(&r.reads, 1)
-	return r.KV.Get(ctx, key, opts...)
+type clientRecorder struct {
+	reads      uint64
+	Kubernetes kubernetes.Interface
+	Client     clientv3.KV
 }
 
 func (r *clientRecorder) GetReadsAndReset() uint64 {
 	return atomic.SwapUint64(&r.reads, 0)
 }
 
+type clientKVRecorder struct {
+	clientv3.KV
+	*clientRecorder
+}
+
+func (r *clientKVRecorder) Get(ctx context.Context, key string, opts ...clientv3.OpOption) (*clientv3.GetResponse, error) {
+	atomic.AddUint64(&r.clientRecorder.reads, 1)
+	return r.KV.Get(ctx, key, opts...)
+}
+
+type clientKubernetesRecorder struct {
+	kubernetes.Interface
+	*clientRecorder
+}
+
+func (r *clientKubernetesRecorder) Get(ctx context.Context, key string, opts kubernetes.GetOptions) (kubernetes.GetResponse, error) {
+	atomic.AddUint64(&r.clientRecorder.reads, 1)
+	return r.Interface.Get(ctx, key, opts)
+}
+
+func (r *clientKubernetesRecorder) List(ctx context.Context, prefix string, opts kubernetes.ListOptions) (kubernetes.ListResponse, error) {
+	atomic.AddUint64(&r.clientRecorder.reads, 1)
+	return r.Interface.List(ctx, prefix, opts)
+}
+
 type setupOptions struct {
-	client         func(testing.TB) *clientv3.Client
+	client         func(testing.TB) *kubernetes.Client
 	codec          runtime.Codec
 	newFunc        func() runtime.Object
 	newListFunc    func() runtime.Object
@@ -509,7 +538,7 @@ type setupOption func(*setupOptions)
 
 func withClientConfig(config *embed.Config) setupOption {
 	return func(options *setupOptions) {
-		options.client = func(t testing.TB) *clientv3.Client {
+		options.client = func(t testing.TB) *kubernetes.Client {
 			return testserver.RunEtcd(t, config)
 		}
 	}
@@ -534,7 +563,7 @@ func withRecorder() setupOption {
 }
 
 func withDefaults(options *setupOptions) {
-	options.client = func(t testing.TB) *clientv3.Client {
+	options.client = func(t testing.TB) *kubernetes.Client {
 		return testserver.RunEtcd(t, nil)
 	}
 	options.codec = apitesting.TestCodec(codecs, examplev1.SchemeGroupVersion)
@@ -549,7 +578,7 @@ func withDefaults(options *setupOptions) {
 
 var _ setupOption = withDefaults
 
-func testSetup(t testing.TB, opts ...setupOption) (context.Context, *store, *clientv3.Client) {
+func testSetup(t testing.TB, opts ...setupOption) (context.Context, *store, *kubernetes.Client) {
 	setupOpts := setupOptions{}
 	opts = append([]setupOption{withDefaults}, opts...)
 	for _, opt := range opts {
@@ -557,7 +586,9 @@ func testSetup(t testing.TB, opts ...setupOption) (context.Context, *store, *cli
 	}
 	client := setupOpts.client(t)
 	if setupOpts.recorderEnabled {
-		client.KV = &clientRecorder{KV: client.KV}
+		recorder := newClientRecorder(client)
+		client.Kubernetes = recorder.Kubernetes
+		client.Client.KV = recorder.Client
 	}
 	store := newStore(
 		client,

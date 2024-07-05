@@ -21,14 +21,15 @@ import (
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.etcd.io/etcd/client/v3/kubernetes"
 	endpointsrequest "k8s.io/apiserver/pkg/endpoints/request"
 )
 
 // NewETCDLatencyTracker returns an implementation of
 // clientv3.KV that times the calls from the specified
 // 'delegate' KV instance in order to track latency incurred.
-func NewETCDLatencyTracker(delegate clientv3.KV) clientv3.KV {
-	return &clientV3KVLatencyTracker{KV: delegate}
+func NewETCDLatencyTracker(delegate *kubernetes.Client) (clientv3.KV, kubernetes.Interface) {
+	return &clientV3KVLatencyTracker{KV: delegate.Client.KV}, &kubernetesInterfaceLatencyTracker{Interface: delegate.Kubernetes}
 }
 
 // clientV3KVLatencyTracker decorates a clientv3.KV instance and times
@@ -104,4 +105,53 @@ func (t *clientV3TxnTracker) Commit() (*clientv3.TxnResponse, error) {
 	}()
 
 	return t.Txn.Commit()
+}
+
+type kubernetesInterfaceLatencyTracker struct {
+	kubernetes.Interface
+}
+
+func (c *kubernetesInterfaceLatencyTracker) OptimisticPut(ctx context.Context, key string, value []byte, expectedRevision int64, opts kubernetes.PutOptions) (kubernetes.PutResponse, error) {
+	startedAt := time.Now()
+	defer func() {
+		endpointsrequest.TrackStorageLatency(ctx, time.Since(startedAt))
+	}()
+
+	return c.Interface.OptimisticPut(ctx, key, value, expectedRevision, opts)
+}
+
+func (c *kubernetesInterfaceLatencyTracker) Get(ctx context.Context, key string, opts kubernetes.GetOptions) (kubernetes.GetResponse, error) {
+	startedAt := time.Now()
+	defer func() {
+		endpointsrequest.TrackStorageLatency(ctx, time.Since(startedAt))
+	}()
+
+	return c.Interface.Get(ctx, key, opts)
+}
+
+func (c *kubernetesInterfaceLatencyTracker) List(ctx context.Context, prefix string, opts kubernetes.ListOptions) (kubernetes.ListResponse, error) {
+	startedAt := time.Now()
+	defer func() {
+		endpointsrequest.TrackStorageLatency(ctx, time.Since(startedAt))
+	}()
+
+	return c.Interface.List(ctx, prefix, opts)
+}
+
+func (c *kubernetesInterfaceLatencyTracker) Count(ctx context.Context, prefix string, opts kubernetes.CountOptions) (int64, error) {
+	startedAt := time.Now()
+	defer func() {
+		endpointsrequest.TrackStorageLatency(ctx, time.Since(startedAt))
+	}()
+
+	return c.Interface.Count(ctx, prefix, opts)
+}
+
+func (c *kubernetesInterfaceLatencyTracker) OptimisticDelete(ctx context.Context, key string, expectedRevision int64, opts kubernetes.DeleteOptions) (kubernetes.DeleteResponse, error) {
+	startedAt := time.Now()
+	defer func() {
+		endpointsrequest.TrackStorageLatency(ctx, time.Since(startedAt))
+	}()
+
+	return c.Interface.OptimisticDelete(ctx, key, expectedRevision, opts)
 }

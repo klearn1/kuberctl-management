@@ -27,7 +27,7 @@ import (
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
-	_ "go.etcd.io/etcd/client/v3/kubernetes"
+	"go.etcd.io/etcd/client/v3/kubernetes"
 	"go.opentelemetry.io/otel/attribute"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -74,7 +74,7 @@ func (d authenticatedDataString) AuthenticatedData() []byte {
 var _ value.Context = authenticatedDataString("")
 
 type store struct {
-	client              *clientv3.Client
+	client              *kubernetes.Client
 	codec               runtime.Codec
 	versioner           storage.Versioner
 	transformer         value.Transformer
@@ -100,11 +100,11 @@ type objState struct {
 }
 
 // New returns an etcd3 implementation of storage.Interface.
-func New(c *clientv3.Client, codec runtime.Codec, newFunc, newListFunc func() runtime.Object, prefix, resourcePrefix string, groupResource schema.GroupResource, transformer value.Transformer, leaseManagerConfig LeaseManagerConfig) storage.Interface {
+func New(c *kubernetes.Client, codec runtime.Codec, newFunc, newListFunc func() runtime.Object, prefix, resourcePrefix string, groupResource schema.GroupResource, transformer value.Transformer, leaseManagerConfig LeaseManagerConfig) storage.Interface {
 	return newStore(c, codec, newFunc, newListFunc, prefix, resourcePrefix, groupResource, transformer, leaseManagerConfig)
 }
 
-func newStore(c *clientv3.Client, codec runtime.Codec, newFunc, newListFunc func() runtime.Object, prefix, resourcePrefix string, groupResource schema.GroupResource, transformer value.Transformer, leaseManagerConfig LeaseManagerConfig) *store {
+func newStore(c *kubernetes.Client, codec runtime.Codec, newFunc, newListFunc func() runtime.Object, prefix, resourcePrefix string, groupResource schema.GroupResource, transformer value.Transformer, leaseManagerConfig LeaseManagerConfig) *store {
 	versioner := storage.APIObjectVersioner{}
 	// for compatibility with etcd2 impl.
 	// no-op for default prefix of '/registry'.
@@ -116,7 +116,7 @@ func newStore(c *clientv3.Client, codec runtime.Codec, newFunc, newListFunc func
 	}
 
 	w := &watcher{
-		client:        c,
+		client:        c.Client,
 		codec:         codec,
 		newFunc:       newFunc,
 		groupResource: groupResource,
@@ -137,7 +137,7 @@ func newStore(c *clientv3.Client, codec runtime.Codec, newFunc, newListFunc func
 		groupResource:       groupResource,
 		groupResourceString: groupResource.String(),
 		watcher:             w,
-		leaseManager:        newDefaultLeaseManager(c, leaseManagerConfig),
+		leaseManager:        newDefaultLeaseManager(c.Client, leaseManagerConfig),
 	}
 
 	w.getCurrentStorageRV = func(ctx context.Context) (uint64, error) {

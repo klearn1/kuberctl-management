@@ -719,11 +719,11 @@ func diffListsOfMaps(original, modified []interface{}, schema LookupPatchMeta, m
 	patch := make([]interface{}, 0, len(modified))
 	deletionList := make([]interface{}, 0, len(original))
 
-	originalKeys, originalMap, err := getMergeListMergeElementsMapAndDistinctKeysList(original, schema, mergeKey)
+	originalKeys, originalMap, err := mergeListToMapAndKeys(original, schema, mergeKey)
 	if err != nil {
 		return nil, nil, err
 	}
-	modifiedKeys, modifiedMap, err := getMergeListMergeElementsMapAndDistinctKeysList(modified, schema, mergeKey)
+	modifiedKeys, modifiedMap, err := mergeListToMapAndKeys(modified, schema, mergeKey)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -823,9 +823,9 @@ func diffListsOfMaps(original, modified []interface{}, schema LookupPatchMeta, m
 	return patch, deletionList, nil
 }
 
-// getMergeListMergeElementsMapAndDistinctKeysList returns slice of distinct mergeKey values ordered same way as in
+// mergeListToMapAndKeys returns slice of distinct mergeKey values ordered same way as in
 // elements slice and map of mergeKey value to slice of matching elements
-func getMergeListMergeElementsMapAndDistinctKeysList(elements []interface{}, schema LookupPatchMeta, mergeKey string,
+func mergeListToMapAndKeys(elements []interface{}, schema LookupPatchMeta, mergeKey string,
 ) ([]interface{}, map[interface{}][]map[string]interface{}, error) {
 	sorted, err := sortMergeListsByNameArray(elements, schema, mergeKey, false)
 	if err != nil {
@@ -1666,11 +1666,11 @@ func deleteMatchingEntries(original []interface{}, mergeKey string, mergeValue i
 // original and patch must be slices of maps, they should be checked before calling this function.
 func mergeSliceWithoutSpecialElements(original, patch []interface{}, mergeKey string, schema LookupPatchMeta, mergeOptions MergeOptions) ([]interface{}, error) {
 	// Representing original and patch as maps. Its more reliable representation for mergeKey behavior.
-	originalKeys, originalMap, err := getMergeListMergeElementsMapAndDistinctKeysList(original, schema, mergeKey)
+	originalKeys, originalMap, err := mergeListToMapAndKeys(original, schema, mergeKey)
 	if err != nil {
 		return nil, err
 	}
-	patchKeys, patchMap, err := getMergeListMergeElementsMapAndDistinctKeysList(patch, schema, mergeKey)
+	patchKeys, patchMap, err := mergeListToMapAndKeys(patch, schema, mergeKey)
 	if err != nil {
 		return nil, err
 	}

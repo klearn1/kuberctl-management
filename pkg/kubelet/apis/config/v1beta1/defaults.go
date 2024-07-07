@@ -240,7 +240,7 @@ func SetDefaults_KubeletConfiguration(obj *kubeletconfigv1beta1.KubeletConfigura
 		obj.ContainerLogMaxFiles = ptr.To[int32](5)
 	}
 	if obj.ContainerLogMaxWorkers == nil {
-		obj.ContainerLogMaxWorkers = utilpointer.Int32(1)
+		obj.ContainerLogMaxWorkers = ptr.To[int32](1)
 	}
 	if obj.ContainerLogMonitorInterval == nil {
 		obj.ContainerLogMonitorInterval = &metav1.Duration{Duration: 10 * time.Second}

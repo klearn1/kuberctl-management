@@ -827,16 +827,11 @@ func diffListsOfMaps(original, modified []interface{}, schema LookupPatchMeta, m
 // elements slice and map of mergeKey value to slice of matching elements
 func mergeListToMapAndKeys(elements []interface{}, schema LookupPatchMeta, mergeKey string,
 ) ([]interface{}, map[interface{}][]map[string]interface{}, error) {
-	sorted, err := sortMergeListsByNameArray(elements, schema, mergeKey, false)
-	if err != nil {
-		return nil, nil, err
-	}
+	keys := make([]interface{}, 0, len(elements))
+	elementsMap := make(map[interface{}][]map[string]interface{}, len(elements))
 
-	keys := make([]interface{}, 0, len(sorted))
-	elementsMap := make(map[interface{}][]map[string]interface{}, len(sorted))
-
-	for i := range sorted {
-		element, elementMergeKeyValue, err := getMapAndMergeKeyValueByIndex(i, mergeKey, sorted)
+	for i := range elements {
+		element, elementMergeKeyValue, err := getMapAndMergeKeyValueByIndex(i, mergeKey, elements)
 		if err != nil {
 			return nil, nil, err
 		}

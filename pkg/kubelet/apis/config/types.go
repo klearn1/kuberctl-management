@@ -494,6 +494,9 @@ type KubeletConfiguration struct {
 	// If not specified the default value is ContainerRuntimeEndpoint
 	// +optional
 	ImageServiceEndpoint string
+
+	// PodHousekeepingPeriod is the period for performing global pod cleanup tasks
+	PodHousekeepingPeriod metav1.Duration
 }
 
 // KubeletAuthorizationMode denotes the authorization mode for the kubelet

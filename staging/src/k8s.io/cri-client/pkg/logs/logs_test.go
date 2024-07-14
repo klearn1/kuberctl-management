@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -214,7 +215,7 @@ func TestReadRotatedLog(t *testing.T) {
 	tmpDir := t.TempDir()
 	file, err := os.CreateTemp(tmpDir, "logfile")
 	if err != nil {
-		assert.NoErrorf(t, err, "unable to create temp file")
+		require.NoErrorf(t, err, "unable to create temp file")
 	}
 	stdoutBuf := &bytes.Buffer{}
 	stderrBuf := &bytes.Buffer{}
@@ -285,7 +286,7 @@ func TestReadRotatedLog(t *testing.T) {
 
 	// Finished writing into the file, close it, so we can delete it later.
 	err = file.Close()
-	assert.NoErrorf(t, err, "could not close file.")
+	require.NoErrorf(t, err, "could not close file.")
 
 	time.Sleep(20 * time.Millisecond)
 	// Make the function ReadLogs end.
@@ -299,7 +300,7 @@ func TestReadRotatedLog(t *testing.T) {
 
 func TestParseLog(t *testing.T) {
 	timestamp, err := time.Parse(timeFormatIn, "2016-10-20T18:39:20.57606443Z")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	msg := &logMessage{}
 	for c, test := range []struct {
 		line string
@@ -363,12 +364,12 @@ func TestParseLog(t *testing.T) {
 		t.Logf("TestCase #%d: %+v", c, test)
 		parse, err := getParseFunc([]byte(test.line))
 		if test.err {
-			assert.Error(t, err)
+			require.Error(t, err)
 			continue
 		}
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		err = parse([]byte(test.line), msg)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, test.msg, msg)
 	}
 }
@@ -412,7 +413,7 @@ func TestWriteLogs(t *testing.T) {
 		stderrBuf := bytes.NewBuffer(nil)
 		w := newLogWriter(stdoutBuf, stderrBuf, &LogOptions{since: test.since, timestamp: test.timestamp, bytes: -1})
 		err := w.write(msg, true)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, test.expectStdout, stdoutBuf.String())
 		assert.Equal(t, test.expectStderr, stderrBuf.String())
 	}
@@ -495,7 +496,7 @@ func TestReadLogsLimitsWithTimestamps(t *testing.T) {
 	logLineNewLine := "2022-10-29T16:10:22.592603036-05:00 stdout F \n"
 
 	tmpfile, err := os.CreateTemp("", "log.*.txt")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	count := 10000
 
@@ -513,14 +514,14 @@ func TestReadLogsLimitsWithTimestamps(t *testing.T) {
 
 	defer os.Remove(tmpfile.Name()) // clean up
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	tmpfile.Close()
 
 	var buf bytes.Buffer
 	w := io.MultiWriter(&buf)
 
 	err = ReadLogs(context.Background(), nil, tmpfile.Name(), "", &LogOptions{tail: -1, bytes: -1, timestamp: true}, nil, w, w)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	lineCount := 0
 	scanner := bufio.NewScanner(bytes.NewReader(buf.Bytes()))
@@ -534,7 +535,7 @@ func TestReadLogsLimitsWithTimestamps(t *testing.T) {
 		//   1. The timestamp should exist
 		//   2. The last item in the log should be 9999
 		_, err = time.Parse(time.RFC3339, string(ts))
-		assert.NoError(t, err, "timestamp not found")
+		require.NoError(t, err, "timestamp not found")
 		assert.True(t, bytes.HasSuffix(logline, []byte("9999")), "is the complete log found")
 	}
 

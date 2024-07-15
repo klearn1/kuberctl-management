@@ -150,7 +150,7 @@ func (pb *prober) runProbe(ctx context.Context, probeType probeType, p *v1.Probe
 			// Log and record event for Unknown result
 			klog.InfoS("HTTP-Probe failed to create request", "error", err)
 			pb.recordContainerEvent(pod, &container, v1.EventTypeWarning, events.ContainerProbeWarning, "%s probe failed: %v", probeType, err)
-			return probe.Unknown, "", err	
+			return probe.Unknown, "", err
 		}
 		if klogV4 := klog.V(4); klogV4.Enabled() {
 			port := req.URL.Port()

@@ -269,7 +269,7 @@ func SetDefaults_KubeletConfiguration(obj *kubeletconfigv1beta1.KubeletConfigura
 		obj.SeccompDefault = ptr.To(false)
 	}
 	if obj.MemoryThrottlingFactor == nil {
-		obj.MemoryThrottlingFactor = ptr.To(DefaultMemoryThrottlingFactor)
+		obj.MemoryThrottlingFactor = ptr.To[float64](DefaultMemoryThrottlingFactor)
 	}
 	if obj.RegisterNode == nil {
 		obj.RegisterNode = ptr.To(true)

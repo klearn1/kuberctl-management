@@ -749,7 +749,7 @@ func TestSetDefaultsKubeletConfiguration(t *testing.T) {
 				EnableProfilingHandler:        ptr.To(true),
 				EnableDebugFlagsHandler:       ptr.To(true),
 				SeccompDefault:                ptr.To(false),
-				MemoryThrottlingFactor:        ptr.To(DefaultMemoryThrottlingFactor),
+				MemoryThrottlingFactor:        ptr.To[float64](DefaultMemoryThrottlingFactor),
 				RegisterNode:                  ptr.To(true),
 				LocalStorageCapacityIsolation: ptr.To(true),
 				PodLogsDir:                    DefaultPodLogsDir,

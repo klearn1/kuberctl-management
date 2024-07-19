@@ -66,7 +66,7 @@ var (
 		TopologyManagerPolicy:           kubeletconfig.SingleNumaNodeTopologyManagerPolicy,
 		ShutdownGracePeriod:             metav1.Duration{Duration: 30 * time.Second},
 		ShutdownGracePeriodCriticalPods: metav1.Duration{Duration: 10 * time.Second},
-		MemoryThrottlingFactor:          ptr.To(0.9),
+		MemoryThrottlingFactor:          ptr.To[float64](0.9),
 		FeatureGates: map[string]bool{
 			"CustomCPUCFSQuotaPeriod": true,
 			"GracefulNodeShutdown":    true,
@@ -447,7 +447,7 @@ func TestValidateKubeletConfiguration(t *testing.T) {
 	}, {
 		name: "invalid MemoryThrottlingFactor",
 		configure: func(conf *kubeletconfig.KubeletConfiguration) *kubeletconfig.KubeletConfiguration {
-			conf.MemoryThrottlingFactor = ptr.To(1.1)
+			conf.MemoryThrottlingFactor = ptr.To[float64](1.1)
 			return conf
 		},
 		errMsg: "invalid configuration: memoryThrottlingFactor 1.1 must be greater than 0 and less than or equal to 1.0",

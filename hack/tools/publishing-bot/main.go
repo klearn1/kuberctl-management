@@ -32,6 +32,8 @@ const (
 	componentsDirectory = stagingDirectory + "src/k8s.io/"
 )
 
+// getGoModDependencies gets all the staging dependencies for all the modules
+// in the given directory
 func getGoModDependencies(dir string) (map[string][]string, error) {
 	allDependencies := make(map[string][]string)
 	components, err := os.ReadDir(dir)
@@ -87,6 +89,7 @@ func diffSlice(s1, s2 []string) []string {
 	return diff
 }
 
+// getKeys returns a slice with only the keys of the given map
 func getKeys[K comparable, V any](m map[K]V) []K {
 	var keys []K
 	for k := range m {

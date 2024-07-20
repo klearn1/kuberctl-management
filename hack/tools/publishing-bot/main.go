@@ -53,7 +53,9 @@ func getGoModDependencies(dir string) (map[string][]string, error) {
 
 		fmt.Printf("%s dependencies", componentName)
 
-		gomodFile, err := modfile.ParseLax(gomodFilePath, gomodFileContent, nil)
+		allDependencies[componentName] = make([]string, 0)
+
+		gomodFile, err := modfile.Parse(gomodFilePath, gomodFileContent, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -61,6 +63,9 @@ func getGoModDependencies(dir string) (map[string][]string, error) {
 		// section
 		for _, module := range gomodFile.Replace {
 			dep := strings.TrimPrefix(module.Old.Path, "k8s.io/")
+			if dep == componentName {
+				continue
+			}
 			allDependencies[componentName] = append(allDependencies[componentName], dep)
 		}
 	}
@@ -93,14 +98,14 @@ func getKeys[K comparable, V any](m map[K]V) []K {
 func main() {
 	rules, err := config.LoadRules(rulesFile)
 	if err != nil {
-		os.Exit(1)
+		panic(err)
 	}
 
-	gomodDependencies, err := getGoModDependencies(stagingDirectory)
+	gomodDependencies, err := getGoModDependencies(componentsDirectory)
 
 	var processedRepos []string
 	for _, rule := range rules.Rules {
-		mainBranch := rule.Branches[0]
+		branch := rule.Branches[0]
 		// CHeck 1
 		// if this no longer exists in master
 		if _, ok := gomodDependencies[rule.DestinationRepository]; !ok {
@@ -136,13 +141,13 @@ func main() {
 		}
 
 		// check 3
-		if mainBranch.Name != "master" {
+		if branch.Name != "master" {
 			err := fmt.Errorf("cannot find master branch for destination `%s`", rule.DestinationRepository)
 			panic(err)
 		}
 
 		// check 4
-		if mainBranch.Source.Branch != "master" {
+		if branch.Source.Branch != "master" {
 			err := fmt.Errorf("cannot find master source branch for destination `%s`", rule.DestinationRepository)
 			panic(err)
 		}
@@ -150,7 +155,7 @@ func main() {
 		// check 5
 		// we specify the go version for all master branches through `default-go-version`
 		// so ensure we don't specify explicit go version for master branch in rules
-		if mainBranch.GoVersion != "" {
+		if branch.GoVersion != "" {
 			err := fmt.Errorf("go version must not be specified for master branch for destination `%s`", rule.DestinationRepository)
 			panic(err)
 		}
@@ -164,14 +169,16 @@ func main() {
 		var processedDeps []string
 		for _, dep := range gomodDependencies[rule.DestinationRepository] {
 			found := false
-			if len(mainBranch.Dependencies) > 0 {
-				for _, dep2 := range mainBranch.Dependencies {
+			if len(branch.Dependencies) > 0 {
+				for _, dep2 := range branch.Dependencies {
 					processedDeps = append(processedDeps, dep2.Repository)
 					if dep2.Branch != "master" {
 						err := fmt.Errorf("looking for master branch of %s and found : %s for destination", dep2.Repository, rule.DestinationRepository)
 						panic(err)
 					}
-					found = dep2.Repository == dep
+					if dep2.Repository == dep {
+						found = true
+					}
 				}
 			} else {
 				err := fmt.Errorf("Please add %s as dependencies under destination %s", gomodDependencies[rule.DestinationRepository], rule.DestinationRepository)

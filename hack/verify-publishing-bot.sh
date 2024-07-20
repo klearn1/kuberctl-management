@@ -29,4 +29,4 @@ kube::golang::setup_env
 
 cd "${KUBE_ROOT}"
 
-go run hack/tools/publishing-bot/verify-publishing-bot.go
+go run hack/tools/publishing-bot/main.go

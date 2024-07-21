@@ -98,10 +98,74 @@ func getKeys[K comparable, V any](m map[K]V) []K {
 	return keys
 }
 
-func main() {
+// checkValidSourceDirectory checks if proper source directory fields are used in rules
+func checkValidSourceDirectory(rule config.RepositoryRule) error {
+	for _, branch := range rule.Branches {
+		if branch.Source.Dir != "" {
+			return fmt.Errorf("use of deprecated `dir` field in rules for `%s`", rule.DestinationRepository)
+		}
+		if len(branch.Source.Dirs) > 1 {
+			return fmt.Errorf("cannot have more than one directory (%s) per source branch `%s` of `%s`",
+				branch.Source.Dirs,
+				branch.Source.Branch,
+				rule.DestinationRepository,
+			)
+		}
+		if !strings.HasSuffix(branch.Source.Dirs[0], rule.DestinationRepository) {
+			return fmt.Errorf("copy/paste error `%s` refers to `%s`", rule.DestinationRepository, branch.Source.Dirs[0])
+		}
+	}
+	return nil
+}
+
+func checkMasterBranch(rule config.RepositoryRule) error {
+	branch := rule.Branches[0]
+	if branch.Name != "master" {
+		return fmt.Errorf("cannot find master branch for destination `%s`", rule.DestinationRepository)
+	}
+
+	if branch.Source.Branch != "master" {
+		return fmt.Errorf("cannot find master source branch for destination `%s`", rule.DestinationRepository)
+	}
+	return nil
+}
+
+func checkDependencies(rule config.RepositoryRule, gomodDependencies map[string][]string) error {
+	var processedDeps []string
+	branch := rule.Branches[0]
+	for _, dep := range gomodDependencies[rule.DestinationRepository] {
+		found := false
+		if len(branch.Dependencies) > 0 {
+			for _, dep2 := range branch.Dependencies {
+				processedDeps = append(processedDeps, dep2.Repository)
+				if dep2.Branch != "master" {
+					return fmt.Errorf("looking for master branch of %s and found : %s for destination", dep2.Repository, rule.DestinationRepository)
+				}
+				if dep2.Repository == dep {
+					found = true
+				}
+			}
+		} else {
+			return fmt.Errorf("Please add %s as dependencies under destination %s", gomodDependencies[rule.DestinationRepository], rule.DestinationRepository)
+		}
+		if !found {
+			return fmt.Errorf("Please add %s as a dependency under destination %s", dep, rule.DestinationRepository)
+		} else {
+			fmt.Printf("dependency %s found\n", dep)
+		}
+	}
+	// check if all deps are processed.
+	extraDeps := diffSlice(processedDeps, gomodDependencies[rule.DestinationRepository])
+	if len(extraDeps) > 0 {
+		return fmt.Errorf("extra dependencies in rules for %s: %s", rule.DestinationRepository, strings.Join(extraDeps, ","))
+	}
+	return nil
+}
+
+func verifyPublishingBotRules() error {
 	rules, err := config.LoadRules(rulesFile)
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("error loading rules: %v", err)
 	}
 
 	gomodDependencies, err := getGoModDependencies(componentsDirectory)
@@ -109,7 +173,7 @@ func main() {
 	var processedRepos []string
 	for _, rule := range rules.Rules {
 		branch := rule.Branches[0]
-		// CHeck 1
+
 		// if this no longer exists in master
 		if _, ok := gomodDependencies[rule.DestinationRepository]; !ok {
 			// make sure we dont include a rule to publish it from master
@@ -123,39 +187,14 @@ func main() {
 			continue
 		}
 
-		// check 2, source directory checks
-		for _, branch := range rule.Branches {
-			if branch.Source.Dir != "" {
-				err := fmt.Errorf("use of deprecated `dir` field in rules for `%s`", rule.DestinationRepository)
-				panic(err)
-			}
-			if len(branch.Source.Dirs) > 1 {
-				err := fmt.Errorf("cannot have more than one directory (%s) per source branch `%s` of `%s`",
-					branch.Source.Dirs,
-					branch.Source.Branch,
-					rule.DestinationRepository,
-				)
-				panic(err)
-			}
-			if !strings.HasSuffix(branch.Source.Dirs[0], rule.DestinationRepository) {
-				err := fmt.Errorf("copy/paste error `%s` refers to `%s`", rule.DestinationRepository, branch.Source.Dirs[0])
-				panic(err)
-			}
+		if err := checkValidSourceDirectory(rule); err != nil {
+			return fmt.Errorf("error validating source directory: %v", err)
 		}
 
-		// check 3
-		if branch.Name != "master" {
-			err := fmt.Errorf("cannot find master branch for destination `%s`", rule.DestinationRepository)
-			panic(err)
+		if err := checkMasterBranch(rule); err != nil {
+			return fmt.Errorf("error validating master branch: %v", err)
 		}
 
-		// check 4
-		if branch.Source.Branch != "master" {
-			err := fmt.Errorf("cannot find master source branch for destination `%s`", rule.DestinationRepository)
-			panic(err)
-		}
-
-		// check 5
 		// we specify the go version for all master branches through `default-go-version`
 		// so ensure we don't specify explicit go version for master branch in rules
 		if branch.GoVersion != "" {
@@ -169,42 +208,23 @@ func main() {
 			panic(err)
 		}
 		processedRepos = append(processedRepos, rule.DestinationRepository)
-		var processedDeps []string
-		for _, dep := range gomodDependencies[rule.DestinationRepository] {
-			found := false
-			if len(branch.Dependencies) > 0 {
-				for _, dep2 := range branch.Dependencies {
-					processedDeps = append(processedDeps, dep2.Repository)
-					if dep2.Branch != "master" {
-						err := fmt.Errorf("looking for master branch of %s and found : %s for destination", dep2.Repository, rule.DestinationRepository)
-						panic(err)
-					}
-					if dep2.Repository == dep {
-						found = true
-					}
-				}
-			} else {
-				err := fmt.Errorf("Please add %s as dependencies under destination %s", gomodDependencies[rule.DestinationRepository], rule.DestinationRepository)
-				panic(err)
-			}
-			if !found {
-				err := fmt.Errorf("Please add %s as a dependency under destination %s", dep, rule.DestinationRepository)
-				panic(err)
-			} else {
-				fmt.Printf("dependency %s found\n", dep)
-			}
-		}
-		// check if all deps are processed.
-		extraDeps := diffSlice(processedDeps, gomodDependencies[rule.DestinationRepository])
-		if len(extraDeps) > 0 {
-			err := fmt.Errorf("extra dependencies in rules for %s: %s", rule.DestinationRepository, strings.Join(extraDeps, ","))
-			panic(err)
+
+		if err := checkDependencies(rule, gomodDependencies); err != nil {
+			return fmt.Errorf("error validating dependencies: %v", err)
 		}
 	}
+
 	// check if all repos are processed.
 	items := diffSlice(getKeys(gomodDependencies), processedRepos)
 	if len(items) > 0 {
 		err := fmt.Errorf("missing rules for %s", strings.Join(items, ","))
+		panic(err)
+	}
+	return nil
+}
+
+func main() {
+	if err := verifyPublishingBotRules(); err != nil {
 		panic(err)
 	}
 }

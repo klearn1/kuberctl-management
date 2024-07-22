@@ -26,10 +26,10 @@ import (
 	"k8s.io/publishing-bot/cmd/publishing-bot/config"
 )
 
-const (
-	stagingDirectory    = "staging/"
-	rulesFile           = stagingDirectory + "publishing/rules.yaml"
-	componentsDirectory = stagingDirectory + "src/k8s.io/"
+var (
+	rulesFile           string
+	componentsDirectory string
+	stagingDirectory    string
 )
 
 // getGoModDependencies gets all the staging dependencies for all the modules
@@ -224,6 +224,15 @@ func verifyPublishingBotRules() error {
 }
 
 func main() {
+	if len(os.Args) != 2 {
+		panic("invalid number of arguments")
+	}
+
+	kubeRoot := os.Args[1]
+	stagingDirectory = kubeRoot + "/staging/"
+	rulesFile = stagingDirectory + "publishing/rules.yaml"
+	componentsDirectory = stagingDirectory + "src/k8s.io/"
+
 	if err := verifyPublishingBotRules(); err != nil {
 		panic(err)
 	}

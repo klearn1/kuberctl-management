@@ -14,9 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# This script checks whether packages under `vendor` directory have cyclic
-# dependencies on `main` or `staging` repositories.
-# Usage: `hack/verify-no-vendor-cycles.sh`.
+# This script checks whether staging/publishing/rules.yaml is correct
+# as per the dependencies in the go.mod of the staging directories
+# Usage: `hack/verify-publishing-bot.sh`.
 
 set -o errexit
 set -o nounset
@@ -27,6 +27,6 @@ source "${KUBE_ROOT}/hack/lib/init.sh"
 
 kube::golang::setup_env
 
-cd "${KUBE_ROOT}"
+cd "${KUBE_ROOT}/hack/tools"
 
-go run hack/tools/publishing-bot/main.go
+go run publishing-bot/main.go "${KUBE_ROOT}"

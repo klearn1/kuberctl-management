@@ -851,6 +851,11 @@ type KubeletConfiguration struct {
 	// If not specified, the value in containerRuntimeEndpoint is used.
 	// +optional
 	ImageServiceEndpoint string `json:"imageServiceEndpoint,omitempty"`
+
+	// PodHousekeepingPeriod is the period for performing global pod cleanup tasks.
+	// Default: 2s
+	// +optional
+	PodHousekeepingPeriod *metav1.Duration `json:"podHousekeepingPeriod,omitempty"`
 }
 
 type KubeletAuthorizationMode string

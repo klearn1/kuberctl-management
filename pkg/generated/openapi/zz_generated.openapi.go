@@ -62402,6 +62402,12 @@ func schema_k8sio_kubelet_config_v1beta1_KubeletConfiguration(ref common.Referen
 							Format:      "",
 						},
 					},
+					"podHousekeepingPeriod": {
+						SchemaProps: spec.SchemaProps{
+							Description: "PodHousekeepingPeriod is the period for performing global pod cleanup tasks. Default: 2s",
+							Ref:         ref("k8s.io/apimachinery/pkg/apis/meta/v1.Duration"),
+						},
+					},
 				},
 				Required: []string{"containerRuntimeEndpoint"},
 			},

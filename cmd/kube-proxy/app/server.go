@@ -25,7 +25,7 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strings"
+	"strconv"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -198,7 +198,7 @@ func newProxyServer(ctx context.Context, config *kubeproxyconfig.KubeProxyConfig
 	}
 
 	rawNodeIPs := getNodeIPs(ctx, s.Client, s.Hostname)
-	s.PrimaryIPFamily, s.NodeIPs = detectNodeIPs(ctx, rawNodeIPs, config.BindAddress)
+	s.PrimaryIPFamily, s.NodeIPs = detectNodeIPs(ctx, rawNodeIPs, config.NodeIPOverride)
 
 	if len(config.NodePortAddresses) == 1 && config.NodePortAddresses[0] == kubeproxyconfig.NodePortAddressesPrimary {
 		var nodePortAddresses []string
@@ -221,8 +221,8 @@ func newProxyServer(ctx context.Context, config *kubeproxyconfig.KubeProxyConfig
 		Namespace: "",
 	}
 
-	if len(config.HealthzBindAddress) > 0 {
-		s.HealthzServer = healthcheck.NewProxierHealthServer(config.HealthzBindAddress, 2*config.IPTables.SyncPeriod.Duration)
+	if len(config.HealthzBindAddresses) > 0 {
+		s.HealthzServer = healthcheck.NewProxierHealthServer(config.HealthzBindAddresses, config.HealthzBindPort, 2*config.SyncPeriod.Duration)
 	}
 
 	err = s.platformSetup(ctx)
@@ -271,8 +271,7 @@ func checkBadConfig(s *ProxyServer) error {
 	// we can at least take note of whether there is any explicitly-dual-stack
 	// configuration.
 	anyDualStackConfig := false
-	clusterCIDRs := strings.Split(s.Config.ClusterCIDR, ",")
-	for _, config := range [][]string{clusterCIDRs, s.Config.NodePortAddresses, s.Config.IPVS.ExcludeCIDRs, s.podCIDRs} {
+	for _, config := range [][]string{s.Config.DetectLocal.ClusterCIDRs, s.Config.NodePortAddresses, s.Config.IPVS.ExcludeCIDRs, s.podCIDRs} {
 		if dual, _ := netutils.IsDualStackCIDRStrings(config); dual {
 			anyDualStackConfig = true
 			break
@@ -314,14 +313,11 @@ func checkBadIPConfig(s *ProxyServer, dualStackSupported bool) (err error, fatal
 		clusterType = fmt.Sprintf("%s-only", s.PrimaryIPFamily)
 	}
 
-	if s.Config.ClusterCIDR != "" {
-		clusterCIDRs := strings.Split(s.Config.ClusterCIDR, ",")
-		if badCIDRs(clusterCIDRs, badFamily) {
-			errors = append(errors, fmt.Errorf("cluster is %s but clusterCIDRs contains only IPv%s addresses", clusterType, badFamily))
-			if s.Config.DetectLocalMode == kubeproxyconfig.LocalModeClusterCIDR && !dualStackSupported {
-				// This has always been a fatal error
-				fatal = true
-			}
+	if badCIDRs(s.Config.DetectLocal.ClusterCIDRs, badFamily) {
+		errors = append(errors, fmt.Errorf("cluster is %s but clusterCIDRs contains only IPv%s addresses", clusterType, badFamily))
+		if s.Config.DetectLocalMode == kubeproxyconfig.LocalModeClusterCIDR && !dualStackSupported {
+			// This has always been a fatal error
+			fatal = true
 		}
 	}
 
@@ -344,11 +340,11 @@ func checkBadIPConfig(s *ProxyServer, dualStackSupported bool) (err error, fatal
 			errors = append(errors, fmt.Errorf("cluster is %s but ipvs.excludeCIDRs contains only IPv%s addresses", clusterType, badFamily))
 		}
 
-		if badBindAddress(s.Config.HealthzBindAddress, badFamily) {
-			errors = append(errors, fmt.Errorf("cluster is %s but healthzBindAddress is IPv%s", clusterType, badFamily))
+		if badBindAddresses(s.Config.HealthzBindAddresses, badFamily) {
+			errors = append(errors, fmt.Errorf("cluster is %s but healthzBindAddresses doesn't contain IPv%s cidr", clusterType, badFamily))
 		}
-		if badBindAddress(s.Config.MetricsBindAddress, badFamily) {
-			errors = append(errors, fmt.Errorf("cluster is %s but metricsBindAddress is IPv%s", clusterType, badFamily))
+		if badBindAddresses(s.Config.MetricsBindAddresses, badFamily) {
+			errors = append(errors, fmt.Errorf("cluster is %s but metricsBindAddresses doesn't contain IPv%s cidr", clusterType, badFamily))
 		}
 	}
 
@@ -371,16 +367,19 @@ func badCIDRs(cidrs []string, wrongFamily netutils.IPFamily) bool {
 	return true
 }
 
-// badBindAddress returns true if bindAddress is an "IP:port" string where IP is a
-// non-zero IP of wrongFamily.
-func badBindAddress(bindAddress string, wrongFamily netutils.IPFamily) bool {
-	if host, _, _ := net.SplitHostPort(bindAddress); host != "" {
-		ip := netutils.ParseIPSloppy(host)
-		if ip != nil && netutils.IPFamilyOf(ip) == wrongFamily && !ip.IsUnspecified() {
-			return true
+// badBindAddresses returns true if cidrs is a non-empty list of CIDRs, all of wrongFamily.
+// Unspecified addresses '0.0.0.0' and '::' are not treated as part of either family.
+func badBindAddresses(addresses []string, wrongFamily netutils.IPFamily) bool {
+	if len(addresses) == 0 {
+		return false
+	}
+	for _, address := range addresses {
+		ip, _, _ := netutils.ParseCIDRSloppy(address)
+		if netutils.IPFamilyOf(ip) != wrongFamily || ip.IsUnspecified() {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 // createClient creates a kube client from the given config and masterOverride.
@@ -440,8 +439,8 @@ func serveHealthz(ctx context.Context, hz *healthcheck.ProxierHealthServer, errC
 	go wait.Until(fn, 5*time.Second, ctx.Done())
 }
 
-func serveMetrics(bindAddress string, proxyMode kubeproxyconfig.ProxyMode, enableProfiling bool, errCh chan error) {
-	if len(bindAddress) == 0 {
+func serveMetrics(logger klog.Logger, cidrStrings []string, port int32, proxyMode kubeproxyconfig.ProxyMode, enableProfiling bool, errCh chan error) {
+	if len(cidrStrings) == 0 {
 		return
 	}
 
@@ -463,19 +462,47 @@ func serveMetrics(bindAddress string, proxyMode kubeproxyconfig.ProxyMode, enabl
 	}
 
 	configz.InstallHandler(proxyMux)
+	nodeIPs, err := proxyutil.FilterInterfaceAddrsByCIDRStrings(proxyutil.RealNetwork{}, cidrStrings)
+	if err != nil {
+		logger.Error(err, "failed to get get node ips for metrics server")
+	}
+	if len(nodeIPs) == 0 {
+		logger.Info("failed to get any node ip matching metricsBindAddresses", "metricsBindAddresses", cidrStrings)
+	}
+	var addrs []string
+	for _, nodeIP := range nodeIPs {
+		if nodeIP.IsLinkLocalUnicast() || nodeIP.IsLinkLocalMulticast() {
+			continue
+		}
+		addrs = append(addrs, net.JoinHostPort(nodeIP.String(), strconv.Itoa(int(port))))
+	}
 
 	fn := func() {
-		err := http.ListenAndServe(bindAddress, proxyMux)
-		if err != nil {
-			err = fmt.Errorf("starting metrics server failed: %w", err)
-			utilruntime.HandleError(err)
-			if errCh != nil {
-				errCh <- err
-				// if in hardfail mode, never retry again
-				blockCh := make(chan error)
-				<-blockCh
+		var err error
+		defer func() {
+			if err != nil {
+				err = fmt.Errorf("starting metrics server failed: %w", err)
+				utilruntime.HandleError(err)
+				if errCh != nil {
+					errCh <- err
+					// if in hardfail mode, never retry again
+					blockCh := make(chan error)
+					<-blockCh
+				}
 			}
+		}()
+
+		listener, err := netutils.MultiListen(context.TODO(), "tcp", addrs...)
+		if err != nil {
+			return
 		}
+
+		server := &http.Server{Handler: proxyMux}
+		err = server.Serve(listener)
+		if err != nil {
+			return
+		}
+
 	}
 	go wait.Until(fn, 5*time.Second, wait.NeverStop)
 }
@@ -517,7 +544,7 @@ func (s *ProxyServer) Run(ctx context.Context) error {
 	serveHealthz(ctx, s.HealthzServer, healthzErrCh)
 
 	// Start up a metrics server if requested
-	serveMetrics(s.Config.MetricsBindAddress, s.Config.Mode, s.Config.EnableProfiling, metricsErrCh)
+	serveMetrics(logger, s.Config.MetricsBindAddresses, s.Config.MetricsBindPort, s.Config.Mode, s.Config.EnableProfiling, metricsErrCh)
 
 	noProxyName, err := labels.NewRequirement(apis.LabelServiceProxyName, selection.DoesNotExist, nil)
 	if err != nil {
@@ -610,10 +637,10 @@ func (s *ProxyServer) birthCry() {
 // used for NodePort handling.)
 //
 // The order of precedence is:
-//  1. if bindAddress is not 0.0.0.0 or ::, then it is used as the primary IP.
+//  1. if nodeIPOverride[0] is not 0.0.0.0 or ::, then ip family of nodeIPOverride[0] is considered as primary IP family.
 //  2. if rawNodeIPs is not empty, then its address(es) is/are used
 //  3. otherwise the node IPs are 127.0.0.1 and ::1
-func detectNodeIPs(ctx context.Context, rawNodeIPs []net.IP, bindAddress string) (v1.IPFamily, map[v1.IPFamily]net.IP) {
+func detectNodeIPs(ctx context.Context, rawNodeIPs []net.IP, nodeIPOverride []string) (v1.IPFamily, map[v1.IPFamily]net.IP) {
 	logger := klog.FromContext(ctx)
 	primaryFamily := v1.IPv4Protocol
 	nodeIPs := map[v1.IPFamily]net.IP{
@@ -636,15 +663,19 @@ func detectNodeIPs(ctx context.Context, rawNodeIPs []net.IP, bindAddress string)
 		}
 	}
 
-	// If a bindAddress is passed, override the primary IP
-	bindIP := netutils.ParseIPSloppy(bindAddress)
-	if bindIP != nil && !bindIP.IsUnspecified() {
-		if netutils.IsIPv4(bindIP) {
-			primaryFamily = v1.IPv4Protocol
-		} else {
-			primaryFamily = v1.IPv6Protocol
+	for i := range nodeIPOverride {
+		family := v1.IPv4Protocol
+		ip := netutils.ParseIPSloppy(nodeIPOverride[i])
+		if ip != nil && !ip.IsUnspecified() {
+			if !netutils.IsIPv4(ip) {
+				family = v1.IPv6Protocol
+			}
+			nodeIPs[family] = ip
+			// only override the primaryFamily for nodeIPOverride[0]
+			if i == 0 {
+				primaryFamily = family
+			}
 		}
-		nodeIPs[primaryFamily] = bindIP
 	}
 
 	if nodeIPs[primaryFamily].IsLoopback() {

@@ -61821,7 +61821,7 @@ func schema_k8sio_kubelet_config_v1beta1_KubeletConfiguration(ref common.Referen
 					},
 					"singleProcessOOMKill": {
 						SchemaProps: spec.SchemaProps{
-							Description: "singleProcessOOMKill, if set, will prevent the `memory.oom.group` flag from being set for container cgroups in cgroups v2. This causes processes in the container to be OOM killed individually instead of as a group. Default: false",
+							Description: "singleProcessOOMKill, if true, will prevent the `memory.oom.group` flag from being set for container cgroups in cgroups v2. This causes processes in the container to be OOM killed individually instead of as a group. It means that if true, the behavior aligns with the behavior of cgroups v1. Default: false",
 							Type:        []string{"boolean"},
 							Format:      "",
 						},

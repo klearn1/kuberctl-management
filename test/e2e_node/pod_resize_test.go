@@ -1149,6 +1149,24 @@ func doPodResizeTests() {
 				},
 			},
 		},
+		{
+			name: "Burstable QoS pod, one container with cpu requests + limits - increase cpu requests",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "300m"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"200m"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "300m"},
+				},
+			},
+		},
 	}
 
 	timeouts := framework.NewTimeoutContext()

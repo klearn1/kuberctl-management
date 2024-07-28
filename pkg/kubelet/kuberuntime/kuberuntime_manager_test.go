@@ -2944,7 +2944,7 @@ func TestDoPodResizeAction(t *testing.T) {
 			},
 			qosClass:            v1.PodQOSGuaranteed,
 			fakeNodeMemoryUsage: 150 * 1024 * 1024,
-			expectedError:       "Aborting attempt to set pod memory limit less than current memory usage",
+			expectedError:       "aborting attempt to set pod memory limit less than current memory usage",
 		},
 		{
 			testName: "pcm.GetPodCgroupConfig() error at increasing memory",
@@ -3125,17 +3125,16 @@ func TestDoPodResizeAction(t *testing.T) {
 				fakeRuntime.InjectError("UpdateContainerResources", errors.New(runtimeErrorMsg))
 			}
 
-			result := kubecontainer.PodSyncResult{}
-			m.doPodResizeAction(pod, kps,
+			err := m.doPodResizeAction(pod, kps,
 				podActions{
 					ContainersToUpdate: containersToUpdate,
 					UpdatePodResources: tc.updatePodResources,
-				}, &result)
+				})
 
 			if tc.expectedError == "" {
-				assert.NoError(t, result.Error())
+				assert.NoError(t, err)
 			} else {
-				assert.ErrorContains(t, result.Error(), tc.expectedError)
+				assert.ErrorContains(t, err, tc.expectedError)
 			}
 		})
 	}

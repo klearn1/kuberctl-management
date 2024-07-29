@@ -424,17 +424,20 @@ func TestJobPodFailurePolicy(t *testing.T) {
 			},
 		},
 	}
+
+	i := 0
+	closeFn, restConfig, clientSet, ns := setup(t, "pod-failure-policy")
+	t.Cleanup(closeFn)
 	for name, test := range testCases {
 		t.Run(name, func(t *testing.T) {
 			resetMetrics()
 
-			closeFn, restConfig, clientSet, ns := setup(t, "simple")
-			defer closeFn()
 			ctx, cancel := startJobControllerAndWaitForCaches(t, restConfig)
-			defer func() {
+			t.Cleanup(func() {
 				cancel()
-			}()
+			})
 
+			test.job.Name = fmt.Sprintf("test-job-%d", i)
 			jobObj, err := createJobWithDefaults(ctx, clientSet, ns.Name, &test.job)
 			if err != nil {
 				t.Fatalf("Error %q while creating the job %q", err, jobObj.Name)
@@ -478,6 +481,7 @@ func TestJobPodFailurePolicy(t *testing.T) {
 			}
 			validateFinishedPodsNoFinalizer(ctx, t, clientSet, jobObj)
 		})
+		i++
 	}
 }
 
@@ -758,18 +762,20 @@ func TestSuccessPolicy(t *testing.T) {
 			wantConditionTypes: []batchv1.JobConditionType{batchv1.JobFailed},
 		},
 	}
+
+	i := 0
+	closeFn, restConfig, clientSet, ns := setup(t, "success-policy")
+	t.Cleanup(closeFn)
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
 			resetMetrics()
 			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.JobSuccessPolicy, tc.enableJobSuccessPolicy)
 			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.JobBackoffLimitPerIndex, tc.enableBackoffLimitPerIndex)
 
-			closeFn, restConfig, clientSet, ns := setup(t, "simple")
-			defer closeFn()
 			ctx, cancel := startJobControllerAndWaitForCaches(t, restConfig)
-			defer func() {
-				cancel()
-			}()
+			t.Cleanup(cancel)
+
+			tc.job.Name = fmt.Sprintf("simple-job-%d", i)
 			jobObj, err := createJobWithDefaults(ctx, clientSet, ns.Name, &tc.job)
 			if err != nil {
 				t.Fatalf("Error %v while creating the Job %q", err, jobObj.Name)
@@ -805,6 +811,7 @@ func TestSuccessPolicy(t *testing.T) {
 			}
 			validateFinishedPodsNoFinalizer(ctx, t, clientSet, jobObj)
 		})
+		i++
 	}
 }
 
@@ -1177,11 +1184,12 @@ func TestBackoffLimitPerIndex_JobPodsCreatedWithExponentialBackoff(t *testing.T)
 // are terminal. The fate of the Job is indicated by the interim Job conditions:
 // FailureTarget, or SuccessCriteriaMet.
 func TestDelayTerminalPhaseCondition(t *testing.T) {
+	const blockDeletionFinalizerForTest string = "fake.example.com/blockDeletion"
 	t.Cleanup(setDurationDuringTest(&jobcontroller.DefaultJobPodFailureBackOff, fastPodFailureBackoff))
 
 	podTemplateSpec := v1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{
-			Finalizers: []string{"fake.example.com/blockDeletion"},
+			Finalizers: []string{blockDeletionFinalizerForTest},
 		},
 		Spec: v1.PodSpec{
 			Containers: []v1.Container{
@@ -1512,6 +1520,10 @@ func TestDelayTerminalPhaseCondition(t *testing.T) {
 			},
 		},
 	}
+
+	i := 0
+	closeFn, restConfig, clientSet, ns := setup(t, "delay-terminal-condition")
+	t.Cleanup(closeFn)
 	for name, test := range testCases {
 		t.Run(name, func(t *testing.T) {
 			resetMetrics()
@@ -1520,16 +1532,17 @@ func TestDelayTerminalPhaseCondition(t *testing.T) {
 			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.ElasticIndexedJob, true)
 			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.JobSuccessPolicy, test.enableJobSuccessPolicy)
 
-			closeFn, restConfig, clientSet, ns := setup(t, "delay-terminal-condition")
-			t.Cleanup(closeFn)
 			ctx, cancel := startJobControllerAndWaitForCaches(t, restConfig)
 			t.Cleanup(cancel)
 
+			test.job.Name = fmt.Sprintf("test-job-%d", i)
 			jobObj, err := createJobWithDefaults(ctx, clientSet, ns.Name, &test.job)
 			if err != nil {
 				t.Fatalf("Error %q while creating the job %q", err, jobObj.Name)
 			}
-			t.Cleanup(func() { removePodsFinalizer(ctx, t, clientSet, ns.Name) })
+			t.Cleanup(func() {
+				removePodsFinalizersByName(ctx, t, clientSet, ns.Name, []string{blockDeletionFinalizerForTest, batchv1.JobTrackingFinalizer})
+			})
 			jobClient := clientSet.BatchV1().Jobs(jobObj.Namespace)
 
 			waitForPodsToBeActive(ctx, t, jobClient, *jobObj.Spec.Parallelism, jobObj)
@@ -1552,6 +1565,7 @@ func TestDelayTerminalPhaseCondition(t *testing.T) {
 			}
 			validateJobStatus(ctx, t, clientSet, jobObj, test.wantTerminalStatus)
 		})
+		i++
 	}
 }
 
@@ -1898,17 +1912,19 @@ func TestBackoffLimitPerIndex(t *testing.T) {
 			},
 		},
 	}
+
+	i := 0
+	closeFn, restConfig, clientSet, ns := setup(t, "backoff-limit-per-index")
+	t.Cleanup(closeFn)
 	for name, test := range testCases {
 		t.Run(name, func(t *testing.T) {
 			resetMetrics()
 			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.JobBackoffLimitPerIndex, true)
 
-			closeFn, restConfig, clientSet, ns := setup(t, "simple")
-			defer closeFn()
 			ctx, cancel := startJobControllerAndWaitForCaches(t, restConfig)
-			defer func() {
-				cancel()
-			}()
+			t.Cleanup(cancel)
+
+			test.job.Name = fmt.Sprintf("test-job-%d", i)
 			jobObj, err := createJobWithDefaults(ctx, clientSet, ns.Name, &test.job)
 			if err != nil {
 				t.Fatalf("Error %q while creating the job %q", err, jobObj.Name)
@@ -1962,6 +1978,7 @@ func TestBackoffLimitPerIndex(t *testing.T) {
 			}
 			validateFinishedPodsNoFinalizer(ctx, t, clientSet, jobObj)
 		})
+		i++
 	}
 }
 
@@ -1969,6 +1986,7 @@ func TestBackoffLimitPerIndex(t *testing.T) {
 // reconcile or skip reconciliation of the Job depending on the Job's managedBy
 // field, and the enablement of the JobManagedBy feature gate.
 func TestManagedBy(t *testing.T) {
+	const blockDeletionFinalizerForTest string = "fake.example.com/blockDeletion"
 	customControllerName := "example.com/custom-job-controller"
 	podTemplateSpec := v1.PodTemplateSpec{
 		Spec: v1.PodSpec{
@@ -2061,19 +2079,31 @@ func TestManagedBy(t *testing.T) {
 			},
 		},
 	}
+
+	i := 0
+	closeFn, restConfig, clientSet, ns := setup(t, "managed-by")
+	t.Cleanup(closeFn)
 	for name, test := range testCases {
 		t.Run(name, func(t *testing.T) {
 			resetMetrics()
 			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.JobManagedBy, test.enableJobManagedBy)
 
-			closeFn, restConfig, clientSet, ns := setup(t, "managed-by")
-			defer closeFn()
 			ctx, cancel := startJobControllerAndWaitForCaches(t, restConfig)
 			defer cancel()
+
+			test.job.Name = fmt.Sprintf("test-job-%d", i)
 			jobObj, err := createJobWithDefaults(ctx, clientSet, ns.Name, &test.job)
 			if err != nil {
 				t.Fatalf("Error %v while creating the job %q", err, klog.KObj(jobObj))
 			}
+
+			defer func() {
+				removePodsFinalizersByName(ctx, t, clientSet, ns.Name, []string{blockDeletionFinalizerForTest, batchv1.JobTrackingFinalizer})
+				// Wait for cleanup to finish to prevent this job from affecting metrics
+				if err := cleanUp(ctx, clientSet, jobObj); err != nil {
+					t.Fatalf("Failed cleanup: %v", err)
+				}
+			}()
 
 			if test.wantReconciledByBuiltInController {
 				validateJobPodsStatus(ctx, t, clientSet, jobObj, podsByStatus{
@@ -2095,6 +2125,7 @@ func TestManagedBy(t *testing.T) {
 				}
 			}
 		})
+		i++
 	}
 }
 
@@ -2814,6 +2845,7 @@ func TestIndexedJob(t *testing.T) {
 }
 
 func TestJobPodReplacementPolicy(t *testing.T) {
+	const blockDeletionFinalizerForTest string = "fake.example.com/blockDeletion"
 	t.Cleanup(setDurationDuringTest(&jobcontroller.DefaultJobPodFailureBackOff, fastPodFailureBackoff))
 	indexedCompletion := batchv1.IndexedCompletion
 	nonIndexedCompletion := batchv1.NonIndexedCompletion
@@ -2844,7 +2876,7 @@ func TestJobPodReplacementPolicy(t *testing.T) {
 				CompletionMode: &indexedCompletion,
 				Template: v1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{
-						Finalizers: []string{"fake.example.com/blockDeletion"},
+						Finalizers: []string{blockDeletionFinalizerForTest},
 					},
 				},
 			},
@@ -2869,7 +2901,7 @@ func TestJobPodReplacementPolicy(t *testing.T) {
 				PodReplacementPolicy: podReplacementPolicy(batchv1.TerminatingOrFailed),
 				Template: v1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{
-						Finalizers: []string{"fake.example.com/blockDeletion"},
+						Finalizers: []string{blockDeletionFinalizerForTest},
 					},
 				},
 			},
@@ -2897,7 +2929,7 @@ func TestJobPodReplacementPolicy(t *testing.T) {
 				PodReplacementPolicy: podReplacementPolicy(batchv1.TerminatingOrFailed),
 				Template: v1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{
-						Finalizers: []string{"fake.example.com/blockDeletion"},
+						Finalizers: []string{blockDeletionFinalizerForTest},
 					},
 				},
 			},
@@ -2925,7 +2957,7 @@ func TestJobPodReplacementPolicy(t *testing.T) {
 				PodReplacementPolicy: podReplacementPolicy(batchv1.Failed),
 				Template: v1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{
-						Finalizers: []string{"fake.example.com/blockDeletion"},
+						Finalizers: []string{blockDeletionFinalizerForTest},
 					},
 				},
 				PodFailurePolicy: &batchv1.PodFailurePolicy{
@@ -2959,7 +2991,7 @@ func TestJobPodReplacementPolicy(t *testing.T) {
 				PodReplacementPolicy: podReplacementPolicy(batchv1.Failed),
 				Template: v1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{
-						Finalizers: []string{"fake.example.com/blockDeletion"},
+						Finalizers: []string{blockDeletionFinalizerForTest},
 					},
 				},
 			},
@@ -2987,7 +3019,7 @@ func TestJobPodReplacementPolicy(t *testing.T) {
 				PodReplacementPolicy: podReplacementPolicy(batchv1.Failed),
 				Template: v1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{
-						Finalizers: []string{"fake.example.com/blockDeletion"},
+						Finalizers: []string{blockDeletionFinalizerForTest},
 					},
 				},
 			},
@@ -3007,18 +3039,23 @@ func TestJobPodReplacementPolicy(t *testing.T) {
 			},
 		},
 	}
+
+	i := 0
+	closeFn, restConfig, clientSet, ns := setup(t, "pod-replacement-policy")
+	t.Cleanup(closeFn)
 	for name, tc := range cases {
 		tc := tc
 		t.Run(name, func(t *testing.T) {
 			featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, features.JobPodReplacementPolicy, tc.podReplacementPolicyEnabled)
 
-			closeFn, restConfig, clientSet, ns := setup(t, "pod-replacement-policy")
-			t.Cleanup(closeFn)
 			ctx, cancel := startJobControllerAndWaitForCaches(t, restConfig)
 			t.Cleanup(cancel)
 			resetMetrics()
 
 			jobObj, err := createJobWithDefaults(ctx, clientSet, ns.Name, &batchv1.Job{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: fmt.Sprintf("test-job-%d", i),
+				},
 				Spec: *tc.jobSpec,
 			})
 			if err != nil {
@@ -3027,7 +3064,12 @@ func TestJobPodReplacementPolicy(t *testing.T) {
 			jobClient := clientSet.BatchV1().Jobs(jobObj.Namespace)
 
 			waitForPodsToBeActive(ctx, t, jobClient, 2, jobObj)
-			t.Cleanup(func() { removePodsFinalizer(ctx, t, clientSet, ns.Name) })
+			t.Cleanup(func() {
+				removePodsFinalizersByName(ctx, t, clientSet, ns.Name, []string{blockDeletionFinalizerForTest, batchv1.JobTrackingFinalizer})
+				if err := cleanUp(ctx, clientSet, jobObj); err != nil {
+					t.Fatalf("Failed cleanup: %v", err)
+				}
+			})
 
 			deletePods(ctx, t, clientSet, ns.Name)
 
@@ -3065,6 +3107,7 @@ func TestJobPodReplacementPolicy(t *testing.T) {
 				metricLabelsWithValue{Labels: []string{"recreate_failed", "succeeded"}, Value: tc.wantMetrics.recreateFailed},
 			)
 		})
+		i++
 	}
 }
 
@@ -3218,11 +3261,12 @@ func TestElasticIndexedJob(t *testing.T) {
 		},
 	}
 
+	i := 0
+	closeFn, restConfig, clientSet, ns := setup(t, "indexed")
+	t.Cleanup(closeFn)
 	for name, tc := range cases {
 		tc := tc
 		t.Run(name, func(t *testing.T) {
-			closeFn, restConfig, clientSet, ns := setup(t, "indexed")
-			defer closeFn()
 			ctx, cancel := startJobControllerAndWaitForCaches(t, restConfig)
 			defer cancel()
 			resetMetrics()
@@ -3230,6 +3274,9 @@ func TestElasticIndexedJob(t *testing.T) {
 			// Set up initial Job in Indexed completion mode.
 			mode := batchv1.IndexedCompletion
 			jobObj, err := createJobWithDefaults(ctx, clientSet, ns.Name, &batchv1.Job{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: fmt.Sprintf("test-job-%d", i),
+				},
 				Spec: batchv1.JobSpec{
 					Parallelism:    ptr.To(initialCompletions),
 					Completions:    ptr.To(initialCompletions),
@@ -3296,6 +3343,7 @@ func TestElasticIndexedJob(t *testing.T) {
 
 			validateJobComplete(ctx, t, clientSet, jobObj)
 		})
+		i++
 	}
 }
 
@@ -3477,7 +3525,7 @@ func BenchmarkLargeFailureHandling(b *testing.B) {
 	}
 }
 
-// cleanUp deletes all pods and the job
+// cleanUp deletes all pods and the job, then waits for job deletion if sync is set to true.
 func cleanUp(ctx context.Context, clientSet clientset.Interface, jobObj *batchv1.Job) error {
 	// Clean up pods in pages, because DeleteCollection might timeout.
 	// #90743
@@ -3498,14 +3546,23 @@ func cleanUp(ctx context.Context, clientSet clientset.Interface, jobObj *batchv1
 			return err
 		}
 	}
-	return clientSet.BatchV1().Jobs(jobObj.Namespace).Delete(ctx, jobObj.Name, metav1.DeleteOptions{})
+
+	// Set the propagation policy to background to ensure that the job doesn't receive any finalizer at deletion time
+	backgroundDeletion := metav1.DeletePropagationBackground
+	if err := clientSet.BatchV1().Jobs(jobObj.Namespace).Delete(ctx, jobObj.Name, metav1.DeleteOptions{
+		PropagationPolicy: &backgroundDeletion,
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 func TestOrphanPodsFinalizersClearedWithGC(t *testing.T) {
+	i := 0
+	closeFn, restConfig, clientSet, ns := setup(t, "simple")
+	t.Cleanup(closeFn)
 	for _, policy := range []metav1.DeletionPropagation{metav1.DeletePropagationOrphan, metav1.DeletePropagationBackground, metav1.DeletePropagationForeground} {
 		t.Run(string(policy), func(t *testing.T) {
-			closeFn, restConfig, clientSet, ns := setup(t, "simple")
-			defer closeFn()
 			informerSet := informers.NewSharedInformerFactory(clientset.NewForConfigOrDie(restclient.AddUserAgent(restConfig, "controller-informers")), 0)
 			// Make the job controller significantly slower to trigger race condition.
 			restConfig.QPS = 1
@@ -3521,6 +3578,9 @@ func TestOrphanPodsFinalizersClearedWithGC(t *testing.T) {
 			runGC()
 
 			jobObj, err := createJobWithDefaults(ctx, clientSet, ns.Name, &batchv1.Job{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: fmt.Sprintf("test-job-%d", i),
+				},
 				Spec: batchv1.JobSpec{
 					Parallelism: ptr.To[int32](2),
 				},
@@ -3545,6 +3605,7 @@ func TestOrphanPodsFinalizersClearedWithGC(t *testing.T) {
 			// Pods never finished, so they are not counted in the metric.
 			validateTerminatedPodsTrackingFinalizerMetric(ctx, t, 0)
 		})
+		i++
 	}
 }
 
@@ -3814,11 +3875,12 @@ func TestSuspendJob(t *testing.T) {
 		},
 	}
 
+	i := 0
+	closeFn, restConfig, clientSet, ns := setup(t, "suspend")
+	t.Cleanup(closeFn)
 	for _, tc := range testCases {
 		name := fmt.Sprintf("feature=%v,create=%v,update=%v", tc.featureGate, tc.create.flag, tc.update.flag)
 		t.Run(name, func(t *testing.T) {
-			closeFn, restConfig, clientSet, ns := setup(t, "suspend")
-			defer closeFn()
 			ctx, cancel := startJobControllerAndWaitForCaches(t, restConfig)
 			defer cancel()
 			events, err := clientSet.EventsV1().Events(ns.Name).Watch(ctx, metav1.ListOptions{})
@@ -3829,6 +3891,9 @@ func TestSuspendJob(t *testing.T) {
 
 			parallelism := int32(2)
 			job, err := createJobWithDefaults(ctx, clientSet, ns.Name, &batchv1.Job{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: fmt.Sprintf("test-job-%d", i),
+				},
 				Spec: batchv1.JobSpec{
 					Parallelism: ptr.To(parallelism),
 					Completions: ptr.To[int32](4),
@@ -3865,6 +3930,7 @@ func TestSuspendJob(t *testing.T) {
 			}
 			validate("update", tc.update.wantActive, tc.update.wantStatus, tc.update.wantReason)
 		})
+		i++
 	}
 }
 
@@ -4468,18 +4534,25 @@ func deletePods(ctx context.Context, t *testing.T, clientSet clientset.Interface
 	}
 }
 
-func removePodsFinalizer(ctx context.Context, t *testing.T, clientSet clientset.Interface, namespace string) {
+func removePodsFinalizersByName(ctx context.Context, t *testing.T, clientSet clientset.Interface, namespace string, finalizersNames []string) {
 	t.Helper()
 	pods, err := clientSet.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		t.Fatalf("Failed to list pods: %v", err)
 	}
+
+	finalizersSet := make(map[string]struct{}, len(finalizersNames))
+	for _, finalizer := range finalizersNames {
+		finalizersSet[finalizer] = struct{}{}
+	}
 	updatePod(ctx, t, clientSet, pods.Items, func(pod *v1.Pod) {
-		for i, finalizer := range pod.Finalizers {
-			if finalizer == "fake.example.com/blockDeletion" {
-				pod.Finalizers = append(pod.Finalizers[:i], pod.Finalizers[i+1:]...)
+		podFinalizers := []string{}
+		for _, podFinalizer := range pod.Finalizers {
+			if _, found := finalizersSet[podFinalizer]; !found {
+				podFinalizers = append(podFinalizers, podFinalizer)
 			}
 		}
+		pod.Finalizers = podFinalizers
 	})
 }
 

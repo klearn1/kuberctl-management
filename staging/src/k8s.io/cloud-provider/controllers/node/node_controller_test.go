@@ -1601,6 +1601,8 @@ func Test_syncNode(t *testing.T) {
 					// Should discard labels that already exist
 					"my.custom.label/foo": "bar",
 					"my.custom.label/bar": "foo",
+					// Should add labels that not match regex
+					"app.k8snio/foo": "foo",
 				},
 			},
 			existingNode: &v1.Node{
@@ -1661,6 +1663,7 @@ func Test_syncNode(t *testing.T) {
 						"topology.kubernetes.io/zone":              "us-west-1a",
 						"my.custom.label/foo":                      "fizz",
 						"my.custom.label/bar":                      "foo",
+						"app.k8snio/foo":                           "foo",
 					},
 				},
 				Spec: v1.NodeSpec{

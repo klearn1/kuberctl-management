@@ -199,7 +199,7 @@ func validateSystemRequirements(mountUtil mount.Interface) (features, error) {
 // TODO(vmarmol): Add limits to the system containers.
 // Takes the absolute name of the specified containers.
 // Empty container name disables use of the specified container.
-func NewContainerManager(mountUtil mount.Interface, cadvisorInterface cadvisor.Interface, nodeConfig NodeConfig, failSwapOn bool, recorder record.EventRecorder, kubeClient clientset.Interface) (ContainerManager, error) {
+func NewContainerManager(ctx context.Context, mountUtil mount.Interface, cadvisorInterface cadvisor.Interface, nodeConfig NodeConfig, failSwapOn bool, recorder record.EventRecorder, kubeClient clientset.Interface) (ContainerManager, error) {
 	subsystems, err := GetCgroupSubsystems()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get mounted cgroup subsystems: %v", err)
@@ -307,7 +307,7 @@ func NewContainerManager(mountUtil mount.Interface, cadvisorInterface cadvisor.I
 	// Initialize DRA manager
 	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.DynamicResourceAllocation) {
 		klog.InfoS("Creating Dynamic Resource Allocation (DRA) manager")
-		cm.draManager, err = dra.NewManagerImpl(kubeClient, nodeConfig.KubeletRootDir, nodeConfig.NodeName)
+		cm.draManager, err = dra.NewManagerImpl(ctx, kubeClient, nodeConfig.KubeletRootDir, nodeConfig.NodeName)
 		if err != nil {
 			return nil, err
 		}
@@ -553,19 +553,18 @@ func (cm *containerManagerImpl) Status() Status {
 	return cm.status
 }
 
-func (cm *containerManagerImpl) Start(node *v1.Node,
+func (cm *containerManagerImpl) Start(ctx context.Context, node *v1.Node,
 	activePods ActivePodsFunc,
 	sourcesReady config.SourcesReady,
 	podStatusProvider status.PodStatusProvider,
 	runtimeService internalapi.RuntimeService,
 	localStorageCapacityIsolation bool) error {
-	ctx := context.Background()
 
 	containerMap, containerRunningSet := buildContainerMapAndRunningSetFromRuntime(ctx, runtimeService)
 
 	// Initialize DRA manager
 	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.DynamicResourceAllocation) {
-		err := cm.draManager.Start(dra.ActivePodsFunc(activePods), sourcesReady)
+		err := cm.draManager.Start(ctx, dra.ActivePodsFunc(activePods), sourcesReady)
 		if err != nil {
 			return fmt.Errorf("start dra manager error: %w", err)
 		}
@@ -655,10 +654,10 @@ func (cm *containerManagerImpl) GetPluginRegistrationHandler() cache.PluginHandl
 }
 
 // TODO: move the GetResources logic to PodContainerManager.
-func (cm *containerManagerImpl) GetResources(pod *v1.Pod, container *v1.Container) (*kubecontainer.RunContainerOptions, error) {
+func (cm *containerManagerImpl) GetResources(ctx context.Context, pod *v1.Pod, container *v1.Container) (*kubecontainer.RunContainerOptions, error) {
 	opts := &kubecontainer.RunContainerOptions{}
 	if utilfeature.DefaultFeatureGate.Enabled(kubefeatures.DynamicResourceAllocation) {
-		resOpts, err := cm.draManager.GetResources(pod, container)
+		resOpts, err := cm.draManager.GetResources(ctx, pod, container)
 		if err != nil {
 			return nil, err
 		}
@@ -1017,12 +1016,12 @@ func containerMemoryFromBlock(blocks []memorymanagerstate.Block) []*podresources
 	return containerMemories
 }
 
-func (cm *containerManagerImpl) PrepareDynamicResources(pod *v1.Pod) error {
-	return cm.draManager.PrepareResources(pod)
+func (cm *containerManagerImpl) PrepareDynamicResources(ctx context.Context, pod *v1.Pod) error {
+	return cm.draManager.PrepareResources(ctx, pod)
 }
 
-func (cm *containerManagerImpl) UnprepareDynamicResources(pod *v1.Pod) error {
-	return cm.draManager.UnprepareResources(pod)
+func (cm *containerManagerImpl) UnprepareDynamicResources(ctx context.Context, pod *v1.Pod) error {
+	return cm.draManager.UnprepareResources(ctx, pod)
 }
 
 func (cm *containerManagerImpl) PodMightNeedToUnprepareResources(UID types.UID) bool {

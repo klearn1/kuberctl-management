@@ -19,10 +19,10 @@ require (
 	github.com/blang/semver/v4 v4.0.0
 	github.com/container-storage-interface/spec v1.8.0
 	github.com/containerd/cgroups v1.1.0
-	github.com/coredns/corefile-migration v1.0.21
+	github.com/coredns/corefile-migration v1.0.23
 	github.com/coreos/go-oidc v2.2.1+incompatible
 	github.com/coreos/go-systemd/v22 v22.5.0
-	github.com/cpuguy83/go-md2man/v2 v2.0.2
+	github.com/cpuguy83/go-md2man/v2 v2.0.3
 	github.com/cyphar/filepath-securejoin v0.2.4
 	github.com/distribution/reference v0.5.0
 	github.com/docker/go-units v0.5.0
@@ -57,7 +57,7 @@ require (
 	github.com/prometheus/client_model v0.4.0
 	github.com/prometheus/common v0.44.0
 	github.com/robfig/cron/v3 v3.0.1
-	github.com/spf13/cobra v1.7.0
+	github.com/spf13/cobra v1.8.0
 	github.com/spf13/pflag v1.0.5
 	github.com/stretchr/testify v1.8.4
 	github.com/vishvananda/netlink v1.1.0

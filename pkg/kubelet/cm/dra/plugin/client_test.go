@@ -109,8 +109,9 @@ func TestGRPCConnIsReused(t *testing.T) {
 	m := sync.Mutex{}
 
 	p := &Plugin{
-		backgroundCtx: tCtx,
-		endpoint:      addr,
+		backgroundCtx:     tCtx,
+		endpoint:          addr,
+		clientCallTimeout: defaultClientCallTimeout,
 	}
 
 	conn, err := p.getOrCreateGRPCConn()

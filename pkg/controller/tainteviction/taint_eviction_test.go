@@ -195,7 +195,7 @@ func TestCreatePod(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			fakeClientset := fake.NewSimpleClientset(&corev1.PodList{Items: []corev1.Pod{*item.pod}})
 			controller, podIndexer, _ := setupNewController(ctx, fakeClientset)
-			controller.recorder = testutil.NewFakeRecorder()
+			controller.recorder = testutil.NewFakeRecorder(t)
 			go controller.Run(ctx)
 			controller.taintedNodes = item.taintedNodes
 
@@ -215,7 +215,7 @@ func TestDeletePod(t *testing.T) {
 
 	fakeClientset := fake.NewSimpleClientset()
 	controller, _, _ := setupNewController(ctx, fakeClientset)
-	controller.recorder = testutil.NewFakeRecorder()
+	controller.recorder = testutil.NewFakeRecorder(t)
 	go controller.Run(ctx)
 	controller.taintedNodes = map[string][]corev1.Taint{
 		"node1": {createNoExecuteTaint(1)},
@@ -289,7 +289,7 @@ func TestUpdatePod(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			fakeClientset := fake.NewSimpleClientset(&corev1.PodList{Items: []corev1.Pod{*item.prevPod}})
 			controller, podIndexer, _ := setupNewController(context.TODO(), fakeClientset)
-			controller.recorder = testutil.NewFakeRecorder()
+			controller.recorder = testutil.NewFakeRecorder(t)
 			controller.taintedNodes = item.taintedNodes
 			go controller.Run(ctx)
 
@@ -358,7 +358,7 @@ func TestCreateNode(t *testing.T) {
 		fakeClientset := fake.NewSimpleClientset(&corev1.PodList{Items: item.pods})
 		controller, _, nodeIndexer := setupNewController(ctx, fakeClientset)
 		nodeIndexer.Add(item.node)
-		controller.recorder = testutil.NewFakeRecorder()
+		controller.recorder = testutil.NewFakeRecorder(t)
 		go controller.Run(ctx)
 		controller.NodeUpdated(nil, item.node)
 
@@ -372,7 +372,7 @@ func TestDeleteNode(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	fakeClientset := fake.NewSimpleClientset()
 	controller, _, _ := setupNewController(ctx, fakeClientset)
-	controller.recorder = testutil.NewFakeRecorder()
+	controller.recorder = testutil.NewFakeRecorder(t)
 	controller.taintedNodes = map[string][]corev1.Taint{
 		"node1": {createNoExecuteTaint(1)},
 	}
@@ -481,7 +481,7 @@ func TestUpdateNode(t *testing.T) {
 			fakeClientset := fake.NewSimpleClientset(&corev1.PodList{Items: item.pods})
 			controller, _, nodeIndexer := setupNewController(ctx, fakeClientset)
 			nodeIndexer.Add(item.newNode)
-			controller.recorder = testutil.NewFakeRecorder()
+			controller.recorder = testutil.NewFakeRecorder(t)
 			go controller.Run(ctx)
 			controller.NodeUpdated(item.oldNode, item.newNode)
 
@@ -517,7 +517,7 @@ func TestUpdateNodeWithMultipleTaints(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.TODO())
 	fakeClientset := fake.NewSimpleClientset(pod)
 	controller, _, nodeIndexer := setupNewController(ctx, fakeClientset)
-	controller.recorder = testutil.NewFakeRecorder()
+	controller.recorder = testutil.NewFakeRecorder(t)
 	go controller.Run(ctx)
 
 	// no taint
@@ -608,7 +608,7 @@ func TestUpdateNodeWithMultiplePods(t *testing.T) {
 			sort.Sort(item.expectedDeleteTimes)
 			controller, _, nodeIndexer := setupNewController(ctx, fakeClientset)
 			nodeIndexer.Add(item.newNode)
-			controller.recorder = testutil.NewFakeRecorder()
+			controller.recorder = testutil.NewFakeRecorder(t)
 			go controller.Run(ctx)
 			controller.NodeUpdated(item.oldNode, item.newNode)
 
@@ -815,7 +815,7 @@ func TestEventualConsistency(t *testing.T) {
 			fakeClientset := fake.NewSimpleClientset(&corev1.PodList{Items: item.pods})
 			controller, podIndexer, nodeIndexer := setupNewController(ctx, fakeClientset)
 			nodeIndexer.Add(item.newNode)
-			controller.recorder = testutil.NewFakeRecorder()
+			controller.recorder = testutil.NewFakeRecorder(t)
 			go controller.Run(ctx)
 
 			if item.prevPod != nil {
@@ -879,7 +879,7 @@ func TestPodDeletionEvent(t *testing.T) {
 
 	t.Run("emitPodDeletionEvent", func(t *testing.T) {
 		controller := &Controller{}
-		recorder := testutil.NewFakeRecorder()
+		recorder := testutil.NewFakeRecorder(t)
 		controller.recorder = recorder
 		controller.emitPodDeletionEvent(types.NamespacedName{
 			Name:      "test",
@@ -910,7 +910,7 @@ func TestPodDeletionEvent(t *testing.T) {
 
 	t.Run("emitCancelPodDeletionEvent", func(t *testing.T) {
 		controller := &Controller{}
-		recorder := testutil.NewFakeRecorder()
+		recorder := testutil.NewFakeRecorder(t)
 		controller.recorder = recorder
 		controller.emitCancelPodDeletionEvent(types.NamespacedName{
 			Name:      "test",

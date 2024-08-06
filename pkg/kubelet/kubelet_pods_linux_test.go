@@ -39,6 +39,10 @@ func TestMakeMounts(t *testing.T) {
 	propagationBidirectional := v1.MountPropagationBidirectional
 	propagationNone := v1.MountPropagationNone
 
+	testKubelet := newTestKubelet(t, false /* controllerAttachDetachEnabled */)
+	defer testKubelet.Cleanup()
+	kubelet := testKubelet.kubelet
+
 	testCases := map[string]struct {
 		container      v1.Container
 		podVolumes     kubecontainer.VolumeMap
@@ -251,7 +255,7 @@ func TestMakeMounts(t *testing.T) {
 				},
 			}
 
-			mounts, _, err := makeMounts(&pod, "/pod", &tc.container, "fakepodname", "", []string{""}, tc.podVolumes, fhu, fsp, nil, tc.supportsRRO, nil)
+			mounts, _, err := kubelet.makeMounts(&pod, "/pod", &tc.container, "fakepodname", "", []string{""}, tc.podVolumes, fhu, fsp, nil, tc.supportsRRO, nil)
 
 			// validate only the error if we expect an error
 			if tc.expectErr {

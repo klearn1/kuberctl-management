@@ -26,14 +26,23 @@ import (
 	"testing"
 
 	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	containertest "k8s.io/kubernetes/pkg/kubelet/container/testing"
+	"k8s.io/kubernetes/pkg/kubelet/events"
 	"k8s.io/kubernetes/pkg/kubelet/prober/results"
 	"k8s.io/kubernetes/pkg/kubelet/util/ioutils"
 	"k8s.io/kubernetes/pkg/probe"
 	execprobe "k8s.io/kubernetes/pkg/probe/exec"
+)
+
+const (
+	Readiness probeType = iota
+	Liveness
+	Startup
 )
 
 func TestGetURLParts(t *testing.T) {
@@ -339,10 +348,28 @@ func TestNewProber(t *testing.T) {
 	recorder := &record.FakeRecorder{}
 	prober := newProber(runner, recorder)
 
-	if prober == nil {
-		t.Error("Expected a non-nil prober")
+	tests := []struct {
+		name   string
+		got    interface{}
+		expect interface{}
+	}{
+		{"non-nil prober", prober != nil, true},
+		{"runner set", prober.runner, runner},
+		{"recorder set", prober.recorder, recorder},
+		{"exec probe initialized", prober.exec != nil, true},
+		{"http probe initialized", prober.http != nil, true},
+		{"tcp probe initialized", prober.tcp != nil, true},
+		{"grpc probe initialized", prober.grpc != nil, true},
 	}
-	// Add more assertions as needed to validate the initialization of prober
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			switch {
+			case tt.got != tt.expect:
+				t.Errorf("Expected %v, but got %v", tt.expect, tt.got)
+			}
+		})
+	}
 }
 
 func TestExecInContainer_Start(t *testing.T) {
@@ -368,5 +395,81 @@ func TestExecInContainer_Start(t *testing.T) {
 		t.Errorf("Expected no error on Wait, got %v", err)
 	}
 
-	// Add assertions to verify the output or other expected behaviors
+}
+
+func TestRecordContainerEventUnknownStatus(t *testing.T) {
+	pod := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pod",
+			Namespace: "default",
+			UID:       types.UID("12345"),
+		},
+		Spec: v1.PodSpec{
+			Containers: []v1.Container{
+				{
+					Name:  "test-container",
+					Image: "nginx",
+				},
+			},
+		},
+	}
+
+	container := pod.Spec.Containers[0]
+	recorder := record.NewFakeRecorder(10)
+	pb := &prober{
+		recorder: recorder,
+	}
+
+	output := "probe output"
+
+	testCases := []struct {
+		probeType probeType
+		result    probe.Result
+		expected  string
+	}{
+		{
+			probeType: readiness,
+			result:    probe.Unknown,
+			expected:  "Unknown Readiness probe status: Unknown",
+		},
+		{
+			probeType: liveness,
+			result:    probe.Unknown,
+			expected:  "Unknown Liveness probe status: Unknown",
+		},
+		{
+			probeType: startup,
+			result:    probe.Unknown,
+			expected:  "Unknown Startup probe status: Unknown",
+		},
+	}
+
+	for _, tc := range testCases {
+		pb.recordContainerEvent(pod, &container, v1.EventTypeWarning, events.ContainerProbeWarning, "%s probe warning: %s", tc.probeType, output)
+		pb.recordContainerEvent(pod, &container, v1.EventTypeWarning, events.ContainerProbeWarning, "Unknown %s probe status: %s", tc.probeType, tc.result)
+
+		// Create a slice to hold event messages
+		var events []string
+
+		// Receive events from the channel
+		for event := range recorder.Events {
+			events = append(events, event)
+		}
+
+		expectedEvents := []string{
+			fmt.Sprintf("%s probe warning: %s", tc.probeType, output),
+			tc.expected,
+		}
+
+		if len(events) != len(expectedEvents) {
+			t.Errorf("unexpected number of events, expected %d got %d", len(expectedEvents), len(events))
+			continue
+		}
+
+		for i, event := range events {
+			if event != expectedEvents[i] {
+				t.Errorf("unexpected event message, expected '%s' got '%s'", expectedEvents[i], event)
+			}
+		}
+	}
 }

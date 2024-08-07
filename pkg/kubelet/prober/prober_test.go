@@ -39,12 +39,6 @@ import (
 	execprobe "k8s.io/kubernetes/pkg/probe/exec"
 )
 
-const (
-	Readiness probeType = iota
-	Liveness
-	Startup
-)
-
 func TestGetURLParts(t *testing.T) {
 	testCases := []struct {
 		probe *v1.HTTPGetAction

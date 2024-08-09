@@ -19,13 +19,19 @@ package upgrade
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/pkg/errors"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	errorsutil "k8s.io/apimachinery/pkg/util/errors"
+	"k8s.io/client-go/kubernetes/fake"
+
 	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
 	"k8s.io/kubernetes/cmd/kubeadm/app/componentconfigs"
 	"k8s.io/kubernetes/cmd/kubeadm/app/constants"
@@ -166,6 +172,144 @@ func TestWriteKubeletConfigFiles(t *testing.T) {
 		if err == nil && len(tc.errPattern) != 0 {
 			t.Fatalf("WriteKubeletConfigFiles didn't return error expected %s", tc.errPattern)
 		}
+	}
+}
+
+func TestUnupgradedControlPlaneInstances(t *testing.T) {
+	testCases := []struct {
+		name          string
+		pods          []corev1.Pod
+		currentNode   string
+		expectedNodes []string
+		expectError   bool
+	}{
+		{
+			name: "one unupgraded instance",
+			pods: []corev1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "kube-apiserver-1",
+						Namespace: metav1.NamespaceSystem,
+						Labels: map[string]string{
+							"component": constants.KubeAPIServer,
+						},
+					},
+					Spec: corev1.PodSpec{
+						NodeName: "node-1",
+						Containers: []corev1.Container{
+							{Name: constants.KubeAPIServer, Image: "k8s.gcr.io/kube-apiserver:v1"},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "kube-apiserver-2",
+						Namespace: metav1.NamespaceSystem,
+						Labels: map[string]string{
+							"component": constants.KubeAPIServer,
+						},
+					},
+					Spec: corev1.PodSpec{
+						NodeName: "node-2",
+						Containers: []corev1.Container{
+							{Name: constants.KubeAPIServer, Image: "k8s.gcr.io/kube-apiserver:v2"},
+						},
+					},
+				},
+			},
+			currentNode:   "node-1",
+			expectedNodes: []string{"node-2"},
+			expectError:   false,
+		},
+		{
+			name: "all upgraded instances, one node",
+			pods: []corev1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "kube-apiserver-1",
+						Namespace: metav1.NamespaceSystem,
+						Labels: map[string]string{
+							"component": constants.KubeAPIServer,
+						},
+					},
+					Spec: corev1.PodSpec{
+						NodeName: "node-1",
+						Containers: []corev1.Container{
+							{Name: constants.KubeAPIServer, Image: "k8s.gcr.io/kube-apiserver:v1"},
+						},
+					},
+				},
+			},
+			currentNode:   "node-1",
+			expectedNodes: nil,
+			expectError:   false,
+		},
+		{
+			name: "all upgraded instances, multi nodes",
+			pods: []corev1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "kube-apiserver-1",
+						Namespace: metav1.NamespaceSystem,
+						Labels: map[string]string{
+							"component": constants.KubeAPIServer,
+						},
+					},
+					Spec: corev1.PodSpec{
+						NodeName: "node-1",
+						Containers: []corev1.Container{
+							{Name: constants.KubeAPIServer, Image: "k8s.gcr.io/kube-apiserver:v1"},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "kube-apiserver-2",
+						Namespace: metav1.NamespaceSystem,
+						Labels: map[string]string{
+							"component": constants.KubeAPIServer,
+						},
+					},
+					Spec: corev1.PodSpec{
+						NodeName: "node-2",
+						Containers: []corev1.Container{
+							{Name: constants.KubeAPIServer, Image: "k8s.gcr.io/kube-apiserver:v1"},
+						},
+					},
+				},
+			},
+			currentNode:   "node-1",
+			expectedNodes: nil,
+			expectError:   false,
+		},
+		{
+			name:          "no kube-apiserver pods",
+			pods:          []corev1.Pod{},
+			currentNode:   "node-1",
+			expectedNodes: nil,
+			expectError:   true,
+		},
+	}
+
+	for _, tc := range testCases {
+		// Create a new test case for each iteration
+		t.Run(tc.name, func(t *testing.T) {
+			var runtimeObjs []runtime.Object
+			for _, pod := range tc.pods {
+				runtimeObjs = append(runtimeObjs, &pod) // Use pointer
+			}
+			client := fake.NewSimpleClientset(runtimeObjs...)
+
+			nodes, err := unupgradedControlPlaneInstances(client, tc.currentNode)
+
+			if tc.expectError != (err != nil) {
+				t.Fatalf("Expected error is %v, got %v", tc.expectError, err)
+			}
+
+			if !reflect.DeepEqual(nodes, tc.expectedNodes) {
+				t.Fatalf("Expected unupgraded control plane instances %v, got %v", tc.expectedNodes, nodes)
+			}
+		})
 	}
 }
 

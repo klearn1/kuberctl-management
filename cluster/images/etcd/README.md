@@ -55,7 +55,7 @@ only be created and pushed when using the `all-push` make target.
 
 #### How to release
 
-First, update `ETCD_VERSION` and `REVSION` in the `Makefile`.
+First, update `ETCD_VERSION` and `REVISION` in the `Makefile`.
 
 Next, build and test the image:
 

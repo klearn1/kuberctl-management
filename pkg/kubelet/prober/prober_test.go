@@ -25,18 +25,19 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	containertest "k8s.io/kubernetes/pkg/kubelet/container/testing"
-	"k8s.io/kubernetes/pkg/kubelet/events"
 	"k8s.io/kubernetes/pkg/kubelet/prober/results"
 	"k8s.io/kubernetes/pkg/kubelet/util/ioutils"
 	"k8s.io/kubernetes/pkg/probe"
 	execprobe "k8s.io/kubernetes/pkg/probe/exec"
+	"k8s.io/kubernetes/test/utils/ktesting"
 )
 
 func TestGetURLParts(t *testing.T) {
@@ -240,24 +241,20 @@ func TestProbe(t *testing.T) {
 			}
 
 			result, err := prober.probe(ctx, probeType, &v1.Pod{}, v1.PodStatus{}, testContainer, containerID)
-			if test.expectError && err == nil {
-				t.Errorf("[%s] Expected probe error but no error was returned.", testID)
+			if test.expectError {
+				require.Error(t, err, "[%s] Expected probe error but no error was returned.", testID)
+			} else {
+				require.NoError(t, err, "[%s] Didn't expect probe error but got: %v", testID, err)
 			}
-			if !test.expectError && err != nil {
-				t.Errorf("[%s] Didn't expect probe error but got: %v", testID, err)
-			}
-			if test.expectedResult != result {
-				t.Errorf("[%s] Expected result to be %v but was %v", testID, test.expectedResult, result)
-			}
+
+			require.Equal(t, test.expectedResult, result, "[%s] Expected result to be %v but was %v", testID, test.expectedResult, result)
 
 			if len(test.expectCommand) > 0 {
 				prober.exec = execprobe.New()
 				prober.runner = &containertest.FakeContainerCommandRunner{}
 				_, err := prober.probe(ctx, probeType, &v1.Pod{}, v1.PodStatus{}, testContainer, containerID)
-				if err != nil {
-					t.Errorf("[%s] Didn't expect probe error but got: %v", testID, err)
-					continue
-				}
+				require.NoError(t, err, "[%s] Didn't expect probe error but got: %v", testID, err)
+
 				if !reflect.DeepEqual(test.expectCommand, prober.runner.(*containertest.FakeContainerCommandRunner).Cmd) {
 					t.Errorf("[%s] unexpected probe arguments: %v", testID, prober.runner.(*containertest.FakeContainerCommandRunner).Cmd)
 				}
@@ -358,8 +355,7 @@ func TestNewProber(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			switch {
-			case tt.got != tt.expect:
+			if tt.got != tt.expect {
 				t.Errorf("Expected %v, but got %v", tt.expect, tt.got)
 			}
 		})
@@ -367,7 +363,7 @@ func TestNewProber(t *testing.T) {
 }
 
 func TestExecInContainer_Start(t *testing.T) {
-	ctx := context.Background()
+	ctx := ktesting.Init(t)
 	runner := &containertest.FakeContainerCommandRunner{
 		Stdout: "executed",
 	}
@@ -381,28 +377,27 @@ func TestExecInContainer_Start(t *testing.T) {
 
 	exec := prober.newExecInContainer(ctx, container, containerID, cmd, 0)
 	err := exec.Start()
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
+	require.NoError(t, err, "Expected no error, got %v", err)
+
 	err = exec.Wait()
-	if err != nil {
-		t.Errorf("Expected no error on Wait, got %v", err)
-	}
+	require.NoError(t, err, "Expected no error on Wait, got %v", err)
 
 }
 
 func TestRecordContainerEventUnknownStatus(t *testing.T) {
+
+	if err := v1.AddToScheme(legacyscheme.Scheme); err != nil {
+		t.Errorf("failed to add v1 to scheme: %v", err)
+	}
+
 	pod := &v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-pod",
-			Namespace: "default",
-			UID:       types.UID("12345"),
+			UID: "test-probe-pod",
 		},
 		Spec: v1.PodSpec{
 			Containers: []v1.Container{
 				{
-					Name:  "test-container",
-					Image: "nginx",
+					Name: "test-probe-container",
 				},
 			},
 		},
@@ -410,6 +405,7 @@ func TestRecordContainerEventUnknownStatus(t *testing.T) {
 
 	container := pod.Spec.Containers[0]
 	recorder := record.NewFakeRecorder(10)
+
 	pb := &prober{
 		recorder: recorder,
 	}
@@ -419,51 +415,56 @@ func TestRecordContainerEventUnknownStatus(t *testing.T) {
 	testCases := []struct {
 		probeType probeType
 		result    probe.Result
-		expected  string
+		expected  []string
 	}{
 		{
 			probeType: readiness,
 			result:    probe.Unknown,
-			expected:  "Unknown Readiness probe status: Unknown",
+			expected: []string{
+				"Warning ContainerProbeWarning Readiness probe warning: probe output",
+				"Warning ContainerProbeWarning Unknown Readiness probe status: unknown",
+			},
 		},
 		{
 			probeType: liveness,
 			result:    probe.Unknown,
-			expected:  "Unknown Liveness probe status: Unknown",
+			expected: []string{
+				"Warning ContainerProbeWarning Liveness probe warning: probe output",
+				"Warning ContainerProbeWarning Unknown Liveness probe status: unknown",
+			},
 		},
 		{
 			probeType: startup,
 			result:    probe.Unknown,
-			expected:  "Unknown Startup probe status: Unknown",
+			expected: []string{
+				"Warning ContainerProbeWarning Startup probe warning: probe output",
+				"Warning ContainerProbeWarning Unknown Startup probe status: unknown",
+			},
 		},
 	}
 
 	for _, tc := range testCases {
-		pb.recordContainerEvent(pod, &container, v1.EventTypeWarning, events.ContainerProbeWarning, "%s probe warning: %s", tc.probeType, output)
-		pb.recordContainerEvent(pod, &container, v1.EventTypeWarning, events.ContainerProbeWarning, "Unknown %s probe status: %s", tc.probeType, tc.result)
+		pb.recordContainerEvent(pod, &container, v1.EventTypeWarning, "ContainerProbeWarning", "%s probe warning: %s", tc.probeType, output)
+		pb.recordContainerEvent(pod, &container, v1.EventTypeWarning, "ContainerProbeWarning", "Unknown %s probe status: %s", tc.probeType, tc.result)
 
 		// Create a slice to hold event messages
 		var events []string
 
 		// Receive events from the channel
-		for event := range recorder.Events {
-			events = append(events, event)
+		for i := 0; i < 2; i++ {
+			events = append(events, <-recorder.Events)
 		}
 
-		expectedEvents := []string{
-			fmt.Sprintf("%s probe warning: %s", tc.probeType, output),
-			tc.expected,
-		}
-
-		if len(events) != len(expectedEvents) {
-			t.Errorf("unexpected number of events, expected %d got %d", len(expectedEvents), len(events))
+		if len(events) != len(tc.expected) {
+			t.Errorf("unexpected number of events, expected %d got %d", len(tc.expected), len(events))
 			continue
 		}
 
 		for i, event := range events {
-			if event != expectedEvents[i] {
-				t.Errorf("unexpected event message, expected '%s' got '%s'", expectedEvents[i], event)
+			if event != tc.expected[i] {
+				t.Errorf("unexpected event message, expected '%s' got '%s'", tc.expected[i], event)
 			}
 		}
 	}
+
 }

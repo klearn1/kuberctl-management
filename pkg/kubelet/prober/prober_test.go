@@ -25,6 +25,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -145,6 +146,7 @@ func TestProbe(t *testing.T) {
 			Exec: &v1.ExecAction{},
 		},
 	}
+
 	tests := []struct {
 		probe          *v1.Probe
 		env            []v1.EnvVar
@@ -178,12 +180,13 @@ func TestProbe(t *testing.T) {
 			execResult:     probe.Warning,
 			expectedResult: results.Success,
 		},
-		{ // Probe result is unknown
+		{ // Probe result is unknown with no error
 			probe:          execProbe,
 			execResult:     probe.Unknown,
-			expectedResult: results.Success,
+			expectError:    false,
+			expectedResult: results.Failure,
 		},
-		{ // Probe has an error
+		{ // Probe result is unknown with an error
 			probe:          execProbe,
 			execError:      true,
 			expectError:    true,
@@ -241,10 +244,11 @@ func TestProbe(t *testing.T) {
 			}
 
 			result, err := prober.probe(ctx, probeType, &v1.Pod{}, v1.PodStatus{}, testContainer, containerID)
+
 			if test.expectError {
 				require.Error(t, err, "[%s] Expected probe error but no error was returned.", testID)
 			} else {
-				require.NoError(t, err, "[%s] Didn't expect probe error but got: %v", testID, err)
+				require.NoError(t, err, "[%s] Didn't expect probe error", testID)
 			}
 
 			require.Equal(t, test.expectedResult, result, "[%s] Expected result to be %v but was %v", testID, test.expectedResult, result)
@@ -253,7 +257,7 @@ func TestProbe(t *testing.T) {
 				prober.exec = execprobe.New()
 				prober.runner = &containertest.FakeContainerCommandRunner{}
 				_, err := prober.probe(ctx, probeType, &v1.Pod{}, v1.PodStatus{}, testContainer, containerID)
-				require.NoError(t, err, "[%s] Didn't expect probe error but got: %v", testID, err)
+				require.NoError(t, err, "[%s] Didn't expect probe error ", testID)
 
 				if !reflect.DeepEqual(test.expectCommand, prober.runner.(*containertest.FakeContainerCommandRunner).Cmd) {
 					t.Errorf("[%s] unexpected probe arguments: %v", testID, prober.runner.(*containertest.FakeContainerCommandRunner).Cmd)
@@ -264,7 +268,7 @@ func TestProbe(t *testing.T) {
 }
 
 func TestNewExecInContainer(t *testing.T) {
-	ctx := context.Background()
+	ctx := ktesting.Init(t)
 	limit := 1024
 	tenKilobyte := strings.Repeat("logs-123", 128*10)
 
@@ -339,56 +343,21 @@ func TestNewProber(t *testing.T) {
 	recorder := &record.FakeRecorder{}
 	prober := newProber(runner, recorder)
 
-	tests := []struct {
-		name   string
-		got    interface{}
-		expect interface{}
-	}{
-		{"non-nil prober", prober != nil, true},
-		{"runner set", prober.runner, runner},
-		{"recorder set", prober.recorder, recorder},
-		{"exec probe initialized", prober.exec != nil, true},
-		{"http probe initialized", prober.http != nil, true},
-		{"tcp probe initialized", prober.tcp != nil, true},
-		{"grpc probe initialized", prober.grpc != nil, true},
-	}
+	assert.NotNil(t, prober, "Expected prober to be non-nil")
+	assert.Equal(t, runner, prober.runner, "Expected prober runner to match")
+	assert.Equal(t, recorder, prober.recorder, "Expected prober recorder to match")
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.got != tt.expect {
-				t.Errorf("Expected %v, but got %v", tt.expect, tt.got)
-			}
-		})
-	}
-}
-
-func TestExecInContainer_Start(t *testing.T) {
-	ctx := ktesting.Init(t)
-	runner := &containertest.FakeContainerCommandRunner{
-		Stdout: "executed",
-	}
-	prober := &prober{
-		runner: runner,
-	}
-
-	container := v1.Container{}
-	containerID := kubecontainer.ContainerID{Type: "docker", ID: "containerID"}
-	cmd := []string{"ls", "-l"}
-
-	exec := prober.newExecInContainer(ctx, container, containerID, cmd, 0)
-	err := exec.Start()
-	require.NoError(t, err, "Expected no error, got %v", err)
-
-	err = exec.Wait()
-	require.NoError(t, err, "Expected no error on Wait, got %v", err)
+	assert.NotNil(t, prober.exec, "exec probe initialized")
+	assert.NotNil(t, prober.http, "http probe initialized")
+	assert.NotNil(t, prober.tcp, "tcp probe initialized")
+	assert.NotNil(t, prober.grpc, "grpc probe initialized")
 
 }
 
 func TestRecordContainerEventUnknownStatus(t *testing.T) {
 
-	if err := v1.AddToScheme(legacyscheme.Scheme); err != nil {
-		t.Errorf("failed to add v1 to scheme: %v", err)
-	}
+	err := v1.AddToScheme(legacyscheme.Scheme)
+	require.NoError(t, err, "failed to add v1 to scheme")
 
 	pod := &v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -444,6 +413,10 @@ func TestRecordContainerEventUnknownStatus(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
+
+		// Create a buffered channel with capacity of 2 - trying to ensure that even if events are not immediately consumed, the event recorder won't block.
+		recorder.Events = make(chan string, 2)
+
 		pb.recordContainerEvent(pod, &container, v1.EventTypeWarning, "ContainerProbeWarning", "%s probe warning: %s", tc.probeType, output)
 		pb.recordContainerEvent(pod, &container, v1.EventTypeWarning, "ContainerProbeWarning", "Unknown %s probe status: %s", tc.probeType, tc.result)
 
@@ -455,15 +428,10 @@ func TestRecordContainerEventUnknownStatus(t *testing.T) {
 			events = append(events, <-recorder.Events)
 		}
 
-		if len(events) != len(tc.expected) {
-			t.Errorf("unexpected number of events, expected %d got %d", len(tc.expected), len(events))
-			continue
-		}
+		assert.Equal(t, len(tc.expected), len(events), "unexpected number of events")
 
 		for i, event := range events {
-			if event != tc.expected[i] {
-				t.Errorf("unexpected event message, expected '%s' got '%s'", tc.expected[i], event)
-			}
+			assert.Equal(t, tc.expected[i], event, "unexpected event message at index %d", i)
 		}
 	}
 

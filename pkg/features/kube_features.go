@@ -275,6 +275,14 @@ const (
 	// deletion ordering.
 	HonorPVReclaimPolicy featuregate.Feature = "HonorPVReclaimPolicy"
 
+	// owner: @vaibhav2107
+	//
+	//
+	// Add support for the eviction hard parameters to inherit their default values in
+    // case any of the paramter is changed. Earlier if any paramter is changed, the other
+	// paramters are set to 0. Disable it to use this behaviour
+	InheritDefaultEvictionValues featuregate.Feature = "InheritDefaultEvictionValues"
+
 	// owner: @leakingtapan
 	// alpha: v1.21
 	//
@@ -1048,6 +1056,8 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 	HonorPVReclaimPolicy: {Default: false, PreRelease: featuregate.Alpha},
 
 	ImageMaximumGCAge: {Default: true, PreRelease: featuregate.Beta},
+
+	InheritDefaultEvictionValues: {Default: true, PreRelease: featuregate.Alpha},
 
 	InTreePluginAWSUnregister: {Default: false, PreRelease: featuregate.Alpha},
 

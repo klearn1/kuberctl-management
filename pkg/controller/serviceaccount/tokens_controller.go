@@ -69,7 +69,7 @@ type TokensControllerOptions struct {
 }
 
 // NewTokensController returns a new *TokensController.
-func NewTokensController(serviceAccounts informers.ServiceAccountInformer, secrets informers.SecretInformer, cl clientset.Interface, options TokensControllerOptions) (*TokensController, error) {
+func NewTokensController(ctx context.Context, serviceAccounts informers.ServiceAccountInformer, secrets informers.SecretInformer, cl clientset.Interface, options TokensControllerOptions) (*TokensController, error) {
 	maxRetries := options.MaxRetries
 	if maxRetries == 0 {
 		maxRetries = 10
@@ -94,26 +94,30 @@ func NewTokensController(serviceAccounts informers.ServiceAccountInformer, secre
 
 	e.serviceAccounts = serviceAccounts.Lister()
 	e.serviceAccountSynced = serviceAccounts.Informer().HasSynced
-	serviceAccounts.Informer().AddEventHandlerWithResyncPeriod(
+	serviceAccounts.Informer().AddEventHandlerWithConfig(
+		ctx,
 		cache.ResourceEventHandlerFuncs{
 			AddFunc:    e.queueServiceAccountSync,
 			UpdateFunc: e.queueServiceAccountUpdateSync,
 			DeleteFunc: e.queueServiceAccountSync,
 		},
-		options.ServiceAccountResync,
+		cache.HandlerConfig{
+			ResyncPeriod: options.ServiceAccountResync,
+		},
 	)
 
 	secretCache := secrets.Informer().GetIndexer()
-	e.updatedSecrets = cache.NewIntegerResourceVersionMutationCache(secretCache, secretCache, 60*time.Second, true)
+	e.updatedSecrets = cache.NewIntegerResourceVersionMutationCache(ctx, secretCache, secretCache, 60*time.Second, true)
 	e.secretSynced = secrets.Informer().HasSynced
-	secrets.Informer().AddEventHandlerWithResyncPeriod(
+	secrets.Informer().AddEventHandlerWithConfig(
+		ctx,
 		cache.FilteringResourceEventHandler{
 			FilterFunc: func(obj interface{}) bool {
 				switch t := obj.(type) {
 				case *v1.Secret:
 					return t.Type == v1.SecretTypeServiceAccountToken
 				default:
-					utilruntime.HandleError(fmt.Errorf("object passed to %T that is not expected: %T", e, obj))
+					utilruntime.HandleError(fmt.Errorf("object passed to %T that is not expected: %T", e, obj)) //nolint:logcheck // Not reached, shouldn't have unknown objects.
 					return false
 				}
 			},
@@ -123,7 +127,9 @@ func NewTokensController(serviceAccounts informers.ServiceAccountInformer, secre
 				DeleteFunc: e.queueSecretSync,
 			},
 		},
-		options.SecretResync,
+		cache.HandlerConfig{
+			ResyncPeriod: options.SecretResync,
+		},
 	)
 
 	return e, nil
@@ -164,11 +170,11 @@ type TokensController struct {
 // Run runs controller blocks until stopCh is closed
 func (e *TokensController) Run(ctx context.Context, workers int) {
 	// Shut down queues
-	defer utilruntime.HandleCrash()
+	defer utilruntime.HandleCrashWithContext(ctx)
 	defer e.syncServiceAccountQueue.ShutDown()
 	defer e.syncSecretQueue.ShutDown()
 
-	if !cache.WaitForNamedCacheSync("tokens", ctx.Done(), e.serviceAccountSynced, e.secretSynced) {
+	if !cache.WaitForNamedCacheSyncWithContext(ctx, e.serviceAccountSynced, e.secretSynced) {
 		return
 	}
 

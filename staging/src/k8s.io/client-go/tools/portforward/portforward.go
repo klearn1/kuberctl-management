@@ -379,9 +379,17 @@ func (pf *PortForwarder) handleConnection(conn net.Conn, port ForwardedPort) {
 	localError := make(chan struct{})
 	remoteDone := make(chan struct{})
 
+	drainRemoteStream := func() {
+		_, err := io.ReadAll(dataStream)
+		if err != nil {
+			fmt.Fprintf(pf.out, "error draining all remain data from remote stream after connection broken\n")
+		}
+	}
+
 	go func() {
 		// Copy from the remote side to the local port.
 		if _, err := io.Copy(conn, dataStream); err != nil && !strings.Contains(err.Error(), "use of closed network connection") {
+			drainRemoteStream()
 			runtime.HandleError(fmt.Errorf("error copying from remote stream to local connection: %v", err))
 		}
 
@@ -395,6 +403,7 @@ func (pf *PortForwarder) handleConnection(conn net.Conn, port ForwardedPort) {
 
 		// Copy from the local port to the remote side.
 		if _, err := io.Copy(dataStream, conn); err != nil && !strings.Contains(err.Error(), "use of closed network connection") {
+			drainRemoteStream()
 			runtime.HandleError(fmt.Errorf("error copying from local connection to remote stream: %v", err))
 			// break out of the select below without waiting for the other copy to finish
 			close(localError)

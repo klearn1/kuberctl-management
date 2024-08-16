@@ -975,6 +975,12 @@ func (c *Cacher) GuaranteedUpdate(
 
 // Count implements storage.Interface.
 func (c *Cacher) Count(pathPrefix string) (int64, error) {
+	if c.ready.check() {
+		cnt := len(c.watchCache.ListKeys())
+		if cnt != 0 {
+			return int64(cnt), nil
+		}
+	}
 	return c.storage.Count(pathPrefix)
 }
 

@@ -83,6 +83,51 @@ const (
 
 // All the histogram based metrics have 1ms as size for the smallest bucket.
 var (
+	scheduleAttempts           *metrics.CounterVec
+	EventHandlingLatency       *metrics.HistogramVec
+	schedulingLatency          *metrics.HistogramVec
+	SchedulingAlgorithmLatency *metrics.Histogram
+	PreemptionVictims          *metrics.Histogram
+	PreemptionAttempts         *metrics.Counter
+	pendingPods                *metrics.GaugeVec
+	Goroutines                 *metrics.GaugeVec
+
+	// PodSchedulingDuration is deprecated as of Kubernetes v1.28, and will be removed
+	// in v1.31. Please use PodSchedulingSLIDuration instead.
+	PodSchedulingDuration           *metrics.HistogramVec
+	PodSchedulingSLIDuration        *metrics.HistogramVec
+	PodSchedulingAttempts           *metrics.Histogram
+	FrameworkExtensionPointDuration *metrics.HistogramVec
+	PluginExecutionDuration         *metrics.HistogramVec
+
+	// This is only available when the QHint feature gate is enabled.
+	queueingHintExecutionDuration *metrics.HistogramVec
+	SchedulerQueueIncomingPods    *metrics.CounterVec
+	PermitWaitDuration            *metrics.HistogramVec
+	CacheSize                     *metrics.GaugeVec
+	unschedulableReasons          *metrics.GaugeVec
+	PluginEvaluationTotal         *metrics.CounterVec
+	metricsList                   []metrics.Registerable
+)
+
+var registerMetrics sync.Once
+
+// Register all metrics.
+func Register() {
+	// Init metrics
+	InitMetrics()
+
+	// Register the metrics.
+	registerMetrics.Do(func() {
+		RegisterMetrics(metricsList...)
+		if utilfeature.DefaultFeatureGate.Enabled(features.SchedulerQueueingHints) {
+			RegisterMetrics(queueingHintExecutionDuration)
+		}
+		volumebindingmetrics.RegisterVolumeSchedulingMetrics()
+	})
+}
+
+func InitMetrics() {
 	scheduleAttempts = metrics.NewCounterVec(
 		&metrics.CounterOpts{
 			Subsystem:      SchedulerSubsystem,
@@ -281,20 +326,6 @@ var (
 		unschedulableReasons,
 		PluginEvaluationTotal,
 	}
-)
-
-var registerMetrics sync.Once
-
-// Register all metrics.
-func Register() {
-	// Register the metrics.
-	registerMetrics.Do(func() {
-		RegisterMetrics(metricsList...)
-		if utilfeature.DefaultFeatureGate.Enabled(features.SchedulerQueueingHints) {
-			RegisterMetrics(queueingHintExecutionDuration)
-		}
-		volumebindingmetrics.RegisterVolumeSchedulingMetrics()
-	})
 }
 
 // RegisterMetrics registers a list of metrics.

@@ -215,7 +215,7 @@ func TestReadRotatedLog(t *testing.T) {
 	tmpDir := t.TempDir()
 	file, err := os.CreateTemp(tmpDir, "logfile")
 	if err != nil {
-		require.NoErrorf(t, err, "unable to create temp file")
+		require.NoError(t, err, "unable to create temp file")
 	}
 	stdoutBuf := &bytes.Buffer{}
 	stderrBuf := &bytes.Buffer{}
@@ -286,7 +286,7 @@ func TestReadRotatedLog(t *testing.T) {
 
 	// Finished writing into the file, close it, so we can delete it later.
 	err = file.Close()
-	require.NoErrorf(t, err, "could not close file.")
+	require.NoError(t, err, "could not close file.")
 
 	time.Sleep(20 * time.Millisecond)
 	// Make the function ReadLogs end.
@@ -364,7 +364,8 @@ func TestParseLog(t *testing.T) {
 		t.Logf("TestCase #%d: %+v", c, test)
 		parse, err := getParseFunc([]byte(test.line))
 		if test.err {
-			require.Error(t, err)
+			//nolint:testifylint //needed to allow to continue in case of failure
+			assert.Error(t, err)
 			continue
 		}
 		require.NoError(t, err)

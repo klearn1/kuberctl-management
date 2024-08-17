@@ -633,6 +633,7 @@ func (f *featureGate) AddFlag(fs *pflag.FlagSet) {
 }
 
 func (f *featureGate) AddMetrics() {
+	featuremetrics.Init()
 	for feature, featureSpec := range f.GetAll() {
 		featuremetrics.RecordFeatureInfo(context.Background(), string(feature), string(featureSpec.PreRelease), f.Enabled(feature))
 	}

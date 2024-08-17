@@ -25,6 +25,10 @@ import (
 
 var (
 	// featureInfo is a Prometheus Gauge metrics used for recording the enablement of a k8s feature.
+	featureInfo *k8smetrics.GaugeVec
+)
+
+func Init() {
 	featureInfo = k8smetrics.NewGaugeVec(
 		&k8smetrics.GaugeOpts{
 			Namespace:      "kubernetes",
@@ -34,9 +38,6 @@ var (
 		},
 		[]string{"name", "stage"},
 	)
-)
-
-func init() {
 	legacyregistry.MustRegister(featureInfo)
 }
 

@@ -574,12 +574,6 @@
     lockToDefault: true
     preRelease: GA
     version: ""
-- name: PodHostIPs
-  versionedSpecs:
-  - default: true
-    lockToDefault: true
-    preRelease: GA
-    version: ""
 - name: PodIndexLabel
   versionedSpecs:
   - default: true

@@ -561,12 +561,8 @@ var _ = SIGDescribe("Kubectl Port forwarding", func() {
 
 			// use raw tcp connection to emulate client close connection without reading response
 			ginkgo.By("Request agohost binary file (40MB+)")
-			httpReq := `GET /agnhost HTTP/1.1
-Host: localhost
-User-Agent: Go-http-client/1.1
-`
-			lines := strings.Split(httpReq, "\n")
-			for _, line := range lines {
+			requestLines := []string{"GET /agnhost HTTP/1.1", "Host: localhost", ""}
+			for _, line := range requestLines {
 				if _, err := conn.Write(append([]byte(line), []byte("\r\n")...)); err != nil {
 					framework.Failf("Couldn't write http request to local connection: %v", err)
 				}

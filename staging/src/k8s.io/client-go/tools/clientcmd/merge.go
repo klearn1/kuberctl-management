@@ -17,7 +17,9 @@ limitations under the License.
 package clientcmd
 
 import (
-	"github.com/imdario/mergo"
+	"fmt"
+	"reflect"
+	"strings"
 )
 
 // recursively merges src into dst:
@@ -25,5 +27,54 @@ import (
 // - maps are shallow merged with src keys taking priority over dst
 // - non-zero src fields encountered during recursion that are not maps or structs overwrite and recursion stops
 func merge[T any](dst, src *T) error {
-	return mergo.Merge(dst, src, mergo.WithOverride)
+	if dst == nil {
+		return fmt.Errorf("cannot merge into nil pointer")
+	}
+	if src == nil {
+		return nil
+	}
+	return mergeValues(nil, reflect.ValueOf(dst).Elem(), reflect.ValueOf(src).Elem())
+}
+
+func mergeValues(fieldNames []string, dst, src reflect.Value) error {
+	dstType := dst.Type()
+	// sanity check types match
+	if srcType := src.Type(); dstType != srcType {
+		return fmt.Errorf("cannot merge mismatched types (%s, %s) at %s", dstType, srcType, strings.Join(fieldNames, "."))
+	}
+	// sanity check dst can be set
+	if !dst.CanSet() {
+		return fmt.Errorf("unsettable value at %s", strings.Join(fieldNames, "."))
+	}
+	// if src is zero, nothing to do
+	if src.IsZero() {
+		return nil
+	}
+	// if dst is zero, just set, don't bother merging
+	if dst.IsZero() {
+		dst.Set(src)
+		return nil
+	}
+
+	switch dstType.Kind() {
+	case reflect.Struct:
+		// recursively merge exported struct fields with src overwriting
+		for i := 0; i < dstType.NumField(); i++ {
+			if fieldInfo := dstType.Field(i); fieldInfo.IsExported() {
+				if err := mergeValues(append(fieldNames, fieldInfo.Name), dst.Field(i), src.Field(i)); err != nil {
+					return err
+				}
+			}
+		}
+	case reflect.Map:
+		// shallow-merge maps with src overwriting
+		for _, mapKey := range src.MapKeys() {
+			dst.SetMapIndex(mapKey, src.MapIndex(mapKey))
+		}
+	default:
+		// overwrite dst for other types
+		dst.Set(src)
+	}
+
+	return nil
 }

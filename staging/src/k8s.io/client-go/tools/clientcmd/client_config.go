@@ -522,7 +522,7 @@ func (config *DirectClientConfig) getContext() (clientcmdapi.Context, error) {
 		return clientcmdapi.Context{}, fmt.Errorf("context %q does not exist", contextName)
 	}
 	if config.overrides != nil {
-		if err := merge(mergedContext, config.overrides.Context); err != nil {
+		if err := merge(mergedContext, &config.overrides.Context); err != nil {
 			return clientcmdapi.Context{}, err
 		}
 	}
@@ -544,7 +544,7 @@ func (config *DirectClientConfig) getAuthInfo() (clientcmdapi.AuthInfo, error) {
 		return clientcmdapi.AuthInfo{}, fmt.Errorf("auth info %q does not exist", authInfoName)
 	}
 	if config.overrides != nil {
-		if err := merge(mergedAuthInfo, config.overrides.AuthInfo); err != nil {
+		if err := merge(mergedAuthInfo, &config.overrides.AuthInfo); err != nil {
 			return clientcmdapi.AuthInfo{}, err
 		}
 	}
@@ -559,7 +559,7 @@ func (config *DirectClientConfig) getCluster() (clientcmdapi.Cluster, error) {
 
 	mergedClusterInfo := clientcmdapi.NewCluster()
 	if config.overrides != nil {
-		if err := merge(mergedClusterInfo, config.overrides.ClusterDefaults); err != nil {
+		if err := merge(mergedClusterInfo, &config.overrides.ClusterDefaults); err != nil {
 			return clientcmdapi.Cluster{}, err
 		}
 	}
@@ -571,7 +571,7 @@ func (config *DirectClientConfig) getCluster() (clientcmdapi.Cluster, error) {
 		return clientcmdapi.Cluster{}, fmt.Errorf("cluster %q does not exist", clusterInfoName)
 	}
 	if config.overrides != nil {
-		if err := merge(mergedClusterInfo, config.overrides.ClusterInfo); err != nil {
+		if err := merge(mergedClusterInfo, &config.overrides.ClusterInfo); err != nil {
 			return clientcmdapi.Cluster{}, err
 		}
 	}

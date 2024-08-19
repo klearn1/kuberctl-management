@@ -190,11 +190,6 @@ runTests() {
 
   installTools
 
-  # Try to normalize input names. This is slow!
-  local -a targets
-  kube::log::status "Normalizing Go targets"
-  kube::util::read-array targets < <(kube::golang::normalize_go_targets "$@")
-
   # Enable coverage data collection?
   local cover_msg
   local COMBINED_COVER_PROFILE
@@ -229,7 +224,7 @@ runTests() {
             go test -json \
             "${goflags[@]:+${goflags[@]}}" \
             "${KUBE_TIMEOUT}" \
-            "${targets[@]}" \
+            "${@}" \
             "${testargs[@]:+${testargs[@]}}" \
     && rc=$? || rc=$?
 

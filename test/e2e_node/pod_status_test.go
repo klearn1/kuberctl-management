@@ -112,7 +112,7 @@ var _ = SIGDescribe(framework.WithSerial(), "Pods status phase", func() {
 		restartKubelet := stopKubelet()
 		gomega.Eventually(ctx, func() bool {
 			return kubeletHealthCheck(kubeletHealthCheckURL)
-		}, f.Timeouts.PodStart, f.Timeouts.Poll).Should(gomega.BeFalse())
+		}, f.Timeouts.PodStart, f.Timeouts.Poll).Should(gomega.BeFalseBecause("kubelet should be stopped"))
 
 		ginkgo.By("Stopping the pod sandbox to simulate the node reboot")
 		err = rs.StopPodSandbox(ctx, podSandboxID)
@@ -122,7 +122,7 @@ var _ = SIGDescribe(framework.WithSerial(), "Pods status phase", func() {
 		restartKubelet()
 		gomega.Eventually(ctx, func() bool {
 			return kubeletHealthCheck(kubeletHealthCheckURL)
-		}, f.Timeouts.PodStart, f.Timeouts.Poll).Should(gomega.BeTrue())
+		}, f.Timeouts.PodStart, f.Timeouts.Poll).Should(gomega.BeTrueBecause("kubelet should be started"))
 
 		ginkgo.By("Waiting for the regular init container to be started after the node reboot")
 		pod, err = waitForPodInitContainerStarted(ctx, f.ClientSet, pod.Namespace, pod.Name, init, f.Timeouts.PodStart)

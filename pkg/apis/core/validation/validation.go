@@ -7476,34 +7476,8 @@ var (
 func ValidateLoadBalancerStatus(status *core.LoadBalancerStatus, fldPath *field.Path, spec *core.ServiceSpec) field.ErrorList {
 	allErrs := field.ErrorList{}
 	ingrPath := fldPath.Child("ingress")
-	if !utilfeature.DefaultFeatureGate.Enabled(features.AllowServiceLBStatusOnNonLB) && spec.Type != core.ServiceTypeLoadBalancer && len(status.Ingress) != 0 {
+	if spec.Type != core.ServiceTypeLoadBalancer && len(status.Ingress) != 0 {
 		allErrs = append(allErrs, field.Forbidden(ingrPath, "may only be used when `spec.type` is 'LoadBalancer'"))
-	} else {
-		for i, ingress := range status.Ingress {
-			idxPath := ingrPath.Index(i)
-			if len(ingress.IP) > 0 {
-				allErrs = append(allErrs, validation.IsValidIP(idxPath.Child("ip"), ingress.IP)...)
-			}
-
-			if utilfeature.DefaultFeatureGate.Enabled(features.LoadBalancerIPMode) && ingress.IPMode == nil {
-				if len(ingress.IP) > 0 {
-					allErrs = append(allErrs, field.Required(idxPath.Child("ipMode"), "must be specified when `ip` is set"))
-				}
-			} else if ingress.IPMode != nil && len(ingress.IP) == 0 {
-				allErrs = append(allErrs, field.Forbidden(idxPath.Child("ipMode"), "may not be specified when `ip` is not set"))
-			} else if ingress.IPMode != nil && !supportedLoadBalancerIPMode.Has(*ingress.IPMode) {
-				allErrs = append(allErrs, field.NotSupported(idxPath.Child("ipMode"), ingress.IPMode, sets.List(supportedLoadBalancerIPMode)))
-			}
-
-			if len(ingress.Hostname) > 0 {
-				for _, msg := range validation.IsDNS1123Subdomain(ingress.Hostname) {
-					allErrs = append(allErrs, field.Invalid(idxPath.Child("hostname"), ingress.Hostname, msg))
-				}
-				if isIP := (netutils.ParseIPSloppy(ingress.Hostname) != nil); isIP {
-					allErrs = append(allErrs, field.Invalid(idxPath.Child("hostname"), ingress.Hostname, "must be a DNS name, not an IP address"))
-				}
-			}
-		}
 	}
 	return allErrs
 }

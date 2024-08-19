@@ -130,11 +130,11 @@ func TestTotals(t *testing.T) {
 	for _, tt := range testCases {
 		t.Run(tt.desc, func(t *testing.T) {
 			_, err := tt.prefix.TransformToStorage(reqCtx, []byte("value"), nil)
-			if err != nil && !tt.expectErr {
+			if (err != nil && !tt.expectErr) || (err == nil && tt.expectErr) {
 				t.Fatal(err)
 			}
 			_, _, err = tt.prefix.TransformFromStorage(reqCtx, []byte("k8s:enc:kms:v1:value"), nil)
-			if err != nil && !tt.expectErr {
+			if (err != nil && !tt.expectErr) || (err == nil && tt.expectErr) {
 				t.Fatal(err)
 			}
 			defer transformerOperationsTotal.Reset()

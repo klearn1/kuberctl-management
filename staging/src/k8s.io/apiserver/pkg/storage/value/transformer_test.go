@@ -192,7 +192,7 @@ func TestPrefixFromMetrics(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
 			_, _, err := tc.prefix.TransformFromStorage(reqCtx, tc.input, nil)
-			if err != nil && !tc.expectErr {
+			if (err != nil && !tc.expectErr) || (err == nil && tc.expectErr) {
 				t.Fatal(err)
 			}
 			defer transformerOperationsTotal.Reset()
@@ -208,7 +208,7 @@ func TestPrefixToMetrics(t *testing.T) {
 	transformerErr := fmt.Errorf("test error")
 	otherTransformer := PrefixTransformer{Prefix: []byte("other:"), Transformer: &testTransformer{from: []byte("value1")}}
 	otherTransformerErr := PrefixTransformer{Prefix: []byte("other:"), Transformer: &testTransformer{err: transformerErr}}
-
+	reqCtx := genericapirequest.WithRequestInfo(context.Background(), &genericapirequest.RequestInfo{Resource: "test"})
 	testCases := []struct {
 		desc      string
 		input     []byte
@@ -216,6 +216,7 @@ func TestPrefixToMetrics(t *testing.T) {
 		metrics   []string
 		want      string
 		expectErr bool
+		ctx       context.Context
 	}{
 		{
 			desc:   "ok",
@@ -230,6 +231,22 @@ func TestPrefixToMetrics(t *testing.T) {
   apiserver_storage_transformation_operations_total{resource="test",status="OK",transformation_type="to_storage",transformer_prefix="other:"} 1
   `,
 			expectErr: false,
+			ctx:       reqCtx,
+		},
+		{
+			desc:   "missing request context",
+			input:  []byte("value"),
+			prefix: NewPrefixTransformers(testErr, otherTransformer),
+			metrics: []string{
+				"apiserver_storage_transformation_operations_total",
+			},
+			want: `
+	# HELP apiserver_storage_transformation_operations_total [ALPHA] Total number of transformations. Successful transformation will have a status 'OK' and a varied status string when the transformation fails. This status and transformation_type fields may be used for alerting on encryption/decryption failure using transformation_type from_storage for decryption and to_storage for encryption
+  # TYPE apiserver_storage_transformation_operations_total counter
+  apiserver_storage_transformation_operations_total{resource="",status="OK",transformation_type="to_storage",transformer_prefix="other:"} 1
+  `,
+			expectErr: false,
+			ctx:       context.Background(),
 		},
 		{
 			desc:   "error",
@@ -244,16 +261,16 @@ func TestPrefixToMetrics(t *testing.T) {
   apiserver_storage_transformation_operations_total{resource="test",status="unknown-non-grpc",transformation_type="to_storage",transformer_prefix="other:"} 1
   `,
 			expectErr: true,
+			ctx:       reqCtx,
 		},
 	}
 
 	RegisterMetrics()
 	transformerOperationsTotal.Reset()
-	reqCtx := genericapirequest.WithRequestInfo(context.Background(), &genericapirequest.RequestInfo{Resource: "test"})
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
-			_, err := tc.prefix.TransformToStorage(reqCtx, tc.input, nil)
-			if err != nil && !tc.expectErr {
+			_, err := tc.prefix.TransformToStorage(tc.ctx, tc.input, nil)
+			if (err != nil && !tc.expectErr) || (err == nil && tc.expectErr) {
 				t.Fatal(err)
 			}
 			defer transformerOperationsTotal.Reset()

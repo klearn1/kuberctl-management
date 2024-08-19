@@ -108,7 +108,7 @@ func (t *prefixTransformers) TransformFromStorage(ctx context.Context, data []by
 	resource := ""
 	reqInfo, found := genericapirequest.RequestInfoFrom(ctx)
 	if !found {
-		klog.V(4).Info("failed to get requestInfo from context")
+		klog.V(4).InfoS("requestInfo not found in context")
 	} else {
 		resource = reqInfo.Resource
 	}
@@ -181,7 +181,7 @@ func (t *prefixTransformers) TransformToStorage(ctx context.Context, data []byte
 	resource := ""
 	reqInfo, found := genericapirequest.RequestInfoFrom(ctx)
 	if !found {
-		klog.V(4).Info("failed to get requestInfo from context")
+		klog.V(4).InfoS("requestInfo not found in context")
 	} else {
 		resource = reqInfo.Resource
 	}

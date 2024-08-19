@@ -118,12 +118,6 @@
     lockToDefault: false
     preRelease: Beta
     version: ""
-- name: CrossNamespaceVolumeDataSource
-  versionedSpecs:
-  - default: false
-    lockToDefault: false
-    preRelease: Alpha
-    version: ""
 - name: CustomResourceFieldSelectors
   versionedSpecs:
   - default: true

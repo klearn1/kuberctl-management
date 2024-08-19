@@ -34,26 +34,6 @@
     lockToDefault: false
     preRelease: Alpha
     version: "1.31"
-- name: CloudControllerManagerWebhook
-  versionedSpecs:
-  - default: false
-    lockToDefault: false
-    preRelease: Alpha
-    version: "1.27"
-- name: CloudDualStackNodeIPs
-  versionedSpecs:
-  - default: false
-    lockToDefault: false
-    preRelease: Alpha
-    version: "1.27"
-  - default: false
-    lockToDefault: false
-    preRelease: Beta
-    version: "1.29"
-  - default: true
-    lockToDefault: true
-    preRelease: GA
-    version: "1.30"
 - name: ClusterTrustBundle
   versionedSpecs:
   - default: false
@@ -76,12 +56,6 @@
     lockToDefault: false
     preRelease: Beta
     version: "1.30"
-- name: CoordinatedLeaderElection
-  versionedSpecs:
-  - default: false
-    lockToDefault: false
-    preRelease: Alpha
-    version: "1.31"
 - name: CPUCFSQuotaPeriod
   versionedSpecs:
   - default: false
@@ -278,12 +252,6 @@
     lockToDefault: true
     preRelease: GA
     version: "1.30"
-- name: HPAScaleToZero
-  versionedSpecs:
-  - default: false
-    lockToDefault: false
-    preRelease: Alpha
-    version: "1.16"
 - name: ImageMaximumGCAge
   versionedSpecs:
   - default: false
@@ -300,12 +268,6 @@
     lockToDefault: false
     preRelease: Alpha
     version: "1.31"
-- name: InPlacePodVerticalScaling
-  versionedSpecs:
-  - default: false
-    lockToDefault: false
-    preRelease: Alpha
-    version: "1.27"
 - name: InTreePluginPortworxUnregister
   versionedSpecs:
   - default: false
@@ -754,16 +716,6 @@
     lockToDefault: false
     preRelease: Alpha
     version: "1.23"
-- name: RecursiveReadOnlyMounts
-  versionedSpecs:
-  - default: false
-    lockToDefault: false
-    preRelease: Alpha
-    version: "1.30"
-  - default: true
-    lockToDefault: false
-    preRelease: Beta
-    version: "1.31"
 - name: RelaxedEnvironmentVariableValidation
   versionedSpecs:
   - default: false
@@ -781,16 +733,6 @@
   - default: false
     lockToDefault: false
     preRelease: Alpha
-    version: "1.31"
-- name: RetryGenerateName
-  versionedSpecs:
-  - default: true
-    lockToDefault: false
-    preRelease: Alpha
-    version: "1.30"
-  - default: true
-    lockToDefault: false
-    preRelease: Beta
     version: "1.31"
 - name: RotateKubeletServerCertificate
   versionedSpecs:
@@ -906,16 +848,6 @@
     lockToDefault: false
     preRelease: Beta
     version: "1.22"
-- name: StableLoadBalancerNodeSet
-  versionedSpecs:
-  - default: false
-    lockToDefault: false
-    preRelease: Beta
-    version: "1.27"
-  - default: true
-    lockToDefault: true
-    preRelease: GA
-    version: "1.30"
 - name: StatefulSetAutoDeletePVC
   versionedSpecs:
   - default: false
@@ -940,12 +872,6 @@
     lockToDefault: true
     preRelease: GA
     version: "1.31"
-- name: StorageNamespaceIndex
-  versionedSpecs:
-  - default: true
-    lockToDefault: false
-    preRelease: Beta
-    version: "1.30"
 - name: StorageVersionMigrator
   versionedSpecs:
   - default: false

@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/component-base/metrics/legacyregistry"
 	"k8s.io/component-base/metrics/testutil"
 )
@@ -124,14 +125,15 @@ func TestTotals(t *testing.T) {
 
 	RegisterMetrics()
 	transformerOperationsTotal.Reset()
+	reqCtx := request.WithRequestInfo(context.Background(), &request.RequestInfo{Resource: "test"})
 
 	for _, tt := range testCases {
 		t.Run(tt.desc, func(t *testing.T) {
-			_, err := tt.prefix.TransformToStorage(context.Background(), "test", []byte("value"), nil)
+			_, err := tt.prefix.TransformToStorage(reqCtx, []byte("value"), nil)
 			if err != nil && !tt.expectErr {
 				t.Fatal(err)
 			}
-			_, _, err = tt.prefix.TransformFromStorage(context.Background(), "test", []byte("k8s:enc:kms:v1:value"), nil)
+			_, _, err = tt.prefix.TransformFromStorage(reqCtx, []byte("k8s:enc:kms:v1:value"), nil)
 			if err != nil && !tt.expectErr {
 				t.Fatal(err)
 			}

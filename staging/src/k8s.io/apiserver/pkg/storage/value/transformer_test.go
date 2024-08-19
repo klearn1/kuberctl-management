@@ -39,12 +39,12 @@ type testTransformer struct {
 	receivedFrom, receivedTo []byte
 }
 
-func (t *testTransformer) TransformFromStorage(ctx context.Context, resource string, data []byte, dataCtx Context) (out []byte, stale bool, err error) {
+func (t *testTransformer) TransformFromStorage(ctx context.Context, data []byte, dataCtx Context) (out []byte, stale bool, err error) {
 	t.receivedFrom = data
 	return t.from, t.stale, t.err
 }
 
-func (t *testTransformer) TransformToStorage(ctx context.Context, resource string, data []byte, dataCtx Context) (out []byte, err error) {
+func (t *testTransformer) TransformToStorage(ctx context.Context, data []byte, dataCtx Context) (out []byte, err error) {
 	t.receivedTo = data
 	return t.to, t.err
 }
@@ -73,8 +73,9 @@ func TestPrefixFrom(t *testing.T) {
 		{[]byte("fails:value"), nil, false, transformErr, 2},
 		{[]byte("stale:value"), []byte("value3"), true, nil, 3},
 	}
+	reqCtx := genericapirequest.WithRequestInfo(context.Background(), &genericapirequest.RequestInfo{Resource: "test"})
 	for i, test := range testCases {
-		got, stale, err := p.TransformFromStorage(context.Background(), "test", test.input, nil)
+		got, stale, err := p.TransformFromStorage(reqCtx, test.input, nil)
 		if err != test.err || stale != test.stale || !bytes.Equal(got, test.expect) {
 			t.Errorf("%d: unexpected out: %q %t %#v", i, string(got), stale, err)
 			continue
@@ -97,9 +98,10 @@ func TestPrefixTo(t *testing.T) {
 		{[]PrefixTransformer{{Prefix: []byte("second:"), Transformer: &testTransformer{to: []byte("value2")}}}, []byte("second:value2"), nil},
 		{[]PrefixTransformer{{Prefix: []byte("fails:"), Transformer: &testTransformer{err: transformErr}}}, nil, transformErr},
 	}
+	reqCtx := genericapirequest.WithRequestInfo(context.Background(), &genericapirequest.RequestInfo{Resource: "test"})
 	for i, test := range testCases {
 		p := NewPrefixTransformers(testErr, test.transformers...)
-		got, err := p.TransformToStorage(context.Background(), "test", []byte("value"), nil)
+		got, err := p.TransformToStorage(reqCtx, []byte("value"), nil)
 		if err != test.err || !bytes.Equal(got, test.expect) {
 			t.Errorf("%d: unexpected out: %q %#v", i, string(got), err)
 			continue
@@ -186,10 +188,10 @@ func TestPrefixFromMetrics(t *testing.T) {
 
 	RegisterMetrics()
 	transformerOperationsTotal.Reset()
-
+	reqCtx := genericapirequest.WithRequestInfo(context.Background(), &genericapirequest.RequestInfo{Resource: "test"})
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
-			_, _, err := tc.prefix.TransformFromStorage(context.Background(), "test", tc.input, nil)
+			_, _, err := tc.prefix.TransformFromStorage(reqCtx, tc.input, nil)
 			if err != nil && !tc.expectErr {
 				t.Fatal(err)
 			}
@@ -247,10 +249,10 @@ func TestPrefixToMetrics(t *testing.T) {
 
 	RegisterMetrics()
 	transformerOperationsTotal.Reset()
-
+	reqCtx := genericapirequest.WithRequestInfo(context.Background(), &genericapirequest.RequestInfo{Resource: "test"})
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
-			_, err := tc.prefix.TransformToStorage(context.Background(), "test", tc.input, nil)
+			_, err := tc.prefix.TransformToStorage(reqCtx, tc.input, nil)
 			if err != nil && !tc.expectErr {
 				t.Fatal(err)
 			}

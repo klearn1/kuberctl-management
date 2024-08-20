@@ -409,6 +409,9 @@ func autoConvert_v1beta1_KubeletConfiguration_To_config_KubeletConfiguration(in 
 	}
 	out.CgroupDriver = in.CgroupDriver
 	out.CPUManagerPolicy = in.CPUManagerPolicy
+	if err := v1.Convert_Pointer_bool_To_bool(&in.SingleProcessOOMKill, &out.SingleProcessOOMKill, s); err != nil {
+		return err
+	}
 	out.CPUManagerPolicyOptions = *(*map[string]string)(unsafe.Pointer(&in.CPUManagerPolicyOptions))
 	out.CPUManagerReconcilePeriod = in.CPUManagerReconcilePeriod
 	out.MemoryManagerPolicy = in.MemoryManagerPolicy
@@ -606,6 +609,9 @@ func autoConvert_config_KubeletConfiguration_To_v1beta1_KubeletConfiguration(in 
 		return err
 	}
 	out.CgroupDriver = in.CgroupDriver
+	if err := v1.Convert_bool_To_Pointer_bool(&in.SingleProcessOOMKill, &out.SingleProcessOOMKill, s); err != nil {
+		return err
+	}
 	out.CPUManagerPolicy = in.CPUManagerPolicy
 	out.CPUManagerPolicyOptions = *(*map[string]string)(unsafe.Pointer(&in.CPUManagerPolicyOptions))
 	out.CPUManagerReconcilePeriod = in.CPUManagerReconcilePeriod

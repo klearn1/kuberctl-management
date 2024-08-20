@@ -17,6 +17,7 @@ limitations under the License.
 package v1beta1
 
 import (
+	"runtime"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -28,6 +29,7 @@ import (
 	"k8s.io/kubernetes/pkg/cluster/ports"
 	"k8s.io/kubernetes/pkg/kubelet/qos"
 	kubetypes "k8s.io/kubernetes/pkg/kubelet/types"
+	kubeletutil "k8s.io/kubernetes/pkg/kubelet/util"
 	utilpointer "k8s.io/utils/pointer"
 )
 
@@ -285,5 +287,16 @@ func SetDefaults_KubeletConfiguration(obj *kubeletconfigv1beta1.KubeletConfigura
 	}
 	if obj.PodLogsDir == "" {
 		obj.PodLogsDir = DefaultPodLogsDir
+	}
+
+	if obj.SingleProcessOOMKill == nil {
+		if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+			obj.SingleProcessOOMKill = utilpointer.Bool(false)
+		} else if !kubeletutil.IsCgroup2UnifiedMode() {
+			// This is a default behavior for cgroups v1.
+			obj.SingleProcessOOMKill = utilpointer.Bool(true)
+		} else {
+			obj.SingleProcessOOMKill = utilpointer.Bool(false)
+		}
 	}
 }

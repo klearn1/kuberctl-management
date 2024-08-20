@@ -18,6 +18,7 @@ package validation
 
 import (
 	"fmt"
+	"runtime"
 	"time"
 	"unicode"
 
@@ -33,6 +34,7 @@ import (
 	"k8s.io/kubernetes/pkg/features"
 	kubeletconfig "k8s.io/kubernetes/pkg/kubelet/apis/config"
 	kubetypes "k8s.io/kubernetes/pkg/kubelet/types"
+	kubeletutil "k8s.io/kubernetes/pkg/kubelet/util"
 	utilfs "k8s.io/kubernetes/pkg/util/filesystem"
 	utiltaints "k8s.io/kubernetes/pkg/util/taints"
 	"k8s.io/utils/cpuset"
@@ -318,6 +320,16 @@ func ValidateKubeletConfiguration(kc *kubeletconfig.KubeletConfiguration, featur
 		if c > unicode.MaxASCII {
 			allErrors = append(allErrors, fmt.Errorf("invalid configuration: pod logs path %q mut contains ASCII characters only", kc.PodLogsDir))
 			break
+		}
+	}
+
+	if kc.SingleProcessOOMKill {
+		if runtime.GOOS == "windows" {
+			allErrors = append(allErrors, fmt.Errorf("invalid configuration: singleProcessOOMKill is not supported on Windows"))
+		}
+
+		if !kubeletutil.IsCgroup2UnifiedMode() {
+			allErrors = append(allErrors, fmt.Errorf("invalid configuration: singleProcessOOMKill requires cgroup v2 unified mode"))
 		}
 	}
 

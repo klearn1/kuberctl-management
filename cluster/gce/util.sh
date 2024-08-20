@@ -1829,8 +1829,8 @@ function generate-certs {
     ./easyrsa --batch "--req-cn=${PRIMARY_CN}@$(date +%s)" build-ca nopass
     # SANS (expected to be) defined by caller
     # shellcheck disable=SC2153
-    ./easyrsa --subject-alt-name="${SANS}" build-server-full "${MASTER_NAME}" nopass
-    ./easyrsa build-client-full kube-apiserver nopass
+    ./easyrsa --batch --subject-alt-name="${SANS}" build-server-full "${MASTER_NAME}" nopass
+    ./easyrsa --batch build-client-full kube-apiserver nopass
 
     kube::util::ensure-cfssl "${KUBE_TEMP}/cfssl"
 
@@ -1843,8 +1843,8 @@ function generate-certs {
     rm -f "kubelet.csr"
 
     # Make a superuser client cert with subject "O=system:masters, CN=kubecfg"
-    ./easyrsa --dn-mode=org \
-      --req-cn=kubecfg --req-org=system:masters \
+    ./easyrsa --batch --dn-mode=org \
+      --req-org=system:masters \
       --req-c= --req-st= --req-city= --req-email= --req-ou= \
       build-client-full kubecfg nopass) &>"${cert_create_debug_output}" || true
   local output_file_missing=0
@@ -1894,8 +1894,8 @@ function generate-aggregator-certs {
     ./easyrsa init-pki
     # this puts the cert into pki/ca.crt and the key into pki/private/ca.key
     ./easyrsa --batch "--req-cn=${AGGREGATOR_PRIMARY_CN}@$(date +%s)" build-ca nopass
-    ./easyrsa --subject-alt-name="${AGGREGATOR_SANS}" build-server-full "${AGGREGATOR_MASTER_NAME}" nopass
-    ./easyrsa build-client-full aggregator-apiserver nopass
+    ./easyrsa --batch --subject-alt-name="${AGGREGATOR_SANS}" build-server-full "${AGGREGATOR_MASTER_NAME}" nopass
+    ./easyrsa --batch build-client-full aggregator-apiserver nopass
 
     kube::util::ensure-cfssl "${KUBE_TEMP}/cfssl"
 
@@ -1908,8 +1908,8 @@ function generate-aggregator-certs {
     rm -f "proxy-client.csr"
 
     # Make a superuser client cert with subject "O=system:masters, CN=kubecfg"
-    ./easyrsa --dn-mode=org \
-      --req-cn=proxy-clientcfg --req-org=system:aggregator \
+    ./easyrsa --batch --dn-mode=org \
+      --req-org=system:aggregator \
       --req-c= --req-st= --req-city= --req-email= --req-ou= \
       build-client-full proxy-clientcfg nopass) &>"${cert_create_debug_output}" || true
   local output_file_missing=0
@@ -1955,8 +1955,8 @@ function generate-konnectivity-server-certs {
     ./easyrsa init-pki
     # this puts the cert into pki/ca.crt and the key into pki/private/ca.key
     ./easyrsa --batch "--req-cn=${KONNECTIVITY_SERVER_PRIMARY_CN}@$(date +%s)" build-ca nopass
-    ./easyrsa --subject-alt-name="IP:127.0.0.1,${KONNECTIVITY_SERVER_SANS}" build-server-full server nopass
-    ./easyrsa build-client-full client nopass
+    ./easyrsa --batch --subject-alt-name="IP:127.0.0.1,${KONNECTIVITY_SERVER_SANS}" build-server-full server nopass
+    ./easyrsa --batch build-client-full client nopass
 
     kube::util::ensure-cfssl "${KUBE_TEMP}/cfssl"
 
@@ -1971,8 +1971,8 @@ function generate-konnectivity-server-certs {
     ./easyrsa init-pki
     # this puts the cert into pki/ca.crt and the key into pki/private/ca.key
     ./easyrsa --batch "--req-cn=${KONNECTIVITY_SERVER_PRIMARY_CN}@$(date +%s)" build-ca nopass
-    ./easyrsa --subject-alt-name="${KONNECTIVITY_SERVER_SANS}" build-server-full server nopass
-    ./easyrsa build-client-full client nopass
+    ./easyrsa --batch --subject-alt-name="${KONNECTIVITY_SERVER_SANS}" build-server-full server nopass
+    ./easyrsa --batch build-client-full client nopass
 
     kube::util::ensure-cfssl "${KUBE_TEMP}/cfssl"
 
@@ -2033,8 +2033,8 @@ function generate-cloud-pvl-admission-certs {
     ./easyrsa init-pki
     # this puts the cert into pki/ca.crt and the key into pki/private/ca.key
     ./easyrsa --batch "--req-cn=${CLOUD_PVL_ADMISSION_PRIMARY_CN}@$(date +%s)" build-ca nopass
-    ./easyrsa --subject-alt-name="IP:127.0.0.1,${CLOUD_PVL_ADMISSION_SANS}" build-server-full server nopass
-    ./easyrsa build-client-full client nopass
+    ./easyrsa --batch --subject-alt-name="IP:127.0.0.1,${CLOUD_PVL_ADMISSION_SANS}" build-server-full server nopass
+    ./easyrsa --batch build-client-full client nopass
 
     kube::util::ensure-cfssl "${KUBE_TEMP}/cfssl"
 
@@ -2049,8 +2049,8 @@ function generate-cloud-pvl-admission-certs {
     ./easyrsa init-pki
     # this puts the cert into pki/ca.crt and the key into pki/private/ca.key
     ./easyrsa --batch "--req-cn=${CLOUD_PVL_ADMISSION_PRIMARY_CN}@$(date +%s)" build-ca nopass
-    ./easyrsa --subject-alt-name="${CLOUD_PVL_ADMISSION_SANS}" build-server-full server nopass
-    ./easyrsa build-client-full client nopass
+    ./easyrsa --batch --subject-alt-name="${CLOUD_PVL_ADMISSION_SANS}" build-server-full server nopass
+    ./easyrsa --batch build-client-full client nopass
 
     kube::util::ensure-cfssl "${KUBE_TEMP}/cfssl"
 

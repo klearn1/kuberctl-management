@@ -401,6 +401,7 @@ func ValidateVolumes(volumes []core.Volume, podMeta *metav1.ObjectMeta, fldPath 
 		}
 	}
 	vols := make(map[string]core.VolumeSource)
+	referPVCs := make(map[string]struct{})
 	for i, vol := range volumes {
 		idxPath := fldPath.Index(i)
 		namePath := idxPath.Child("name")
@@ -424,6 +425,15 @@ func ValidateVolumes(volumes []core.Volume, podMeta *metav1.ObjectMeta, fldPath 
 		if vol.PersistentVolumeClaim != nil && allCreatedPVCs.Has(vol.PersistentVolumeClaim.ClaimName) {
 			allErrs = append(allErrs, field.Invalid(idxPath.Child("persistentVolumeClaim").Child("claimName"), vol.PersistentVolumeClaim.ClaimName,
 				"must not reference a PVC that gets created for an ephemeral volume"))
+		}
+		if vol.PersistentVolumeClaim != nil {
+			claimName := vol.PersistentVolumeClaim.ClaimName
+			if _, ok := referPVCs[claimName]; !ok {
+				referPVCs[claimName] = struct{}{}
+			} else {
+				allErrs = append(allErrs, field.Invalid(idxPath.Child("persistentVolumeClaim").Child("claimName"), vol.PersistentVolumeClaim.ClaimName,
+					"must not reference one PVC multi times in volumes"))
+			}
 		}
 	}
 

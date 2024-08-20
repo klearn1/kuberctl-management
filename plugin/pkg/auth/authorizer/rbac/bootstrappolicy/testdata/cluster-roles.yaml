@@ -1066,6 +1066,7 @@ items:
     - volumeattachments
     verbs:
     - get
+    - watch
   - apiGroups:
     - ""
     resources:

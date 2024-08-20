@@ -65,7 +65,7 @@ func NewCmdConfig(restClientGetter genericclioptions.RESTClientGetter, pathOptio
 	cmd.AddCommand(NewCmdConfigCurrentContext(streams.Out, pathOptions))
 	cmd.AddCommand(NewCmdConfigUseContext(streams.Out, pathOptions))
 	cmd.AddCommand(NewCmdConfigGetContexts(streams, pathOptions))
-	cmd.AddCommand(NewCmdConfigGetClusters(streams.Out, pathOptions))
+	cmd.AddCommand(NewCmdConfigGetClusters(streams, pathOptions))
 	cmd.AddCommand(NewCmdConfigGetUsers(streams, pathOptions))
 	cmd.AddCommand(NewCmdConfigDeleteCluster(streams.Out, pathOptions))
 	cmd.AddCommand(NewCmdConfigDeleteContext(streams.Out, streams.ErrOut, pathOptions))

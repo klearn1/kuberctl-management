@@ -18,6 +18,7 @@ package devicemanager
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,7 +38,7 @@ import (
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/kubelet/checkpointmanager"
-	"k8s.io/kubernetes/pkg/kubelet/checkpointmanager/errors"
+	checkpointerrors "k8s.io/kubernetes/pkg/kubelet/checkpointmanager/errors"
 	"k8s.io/kubernetes/pkg/kubelet/cm/containermap"
 	"k8s.io/kubernetes/pkg/kubelet/cm/devicemanager/checkpoint"
 	plugin "k8s.io/kubernetes/pkg/kubelet/cm/devicemanager/plugin/v1beta1"
@@ -505,7 +506,7 @@ func (m *ManagerImpl) writeCheckpoint() error {
 func (m *ManagerImpl) readCheckpoint() error {
 	cp, err := m.getCheckpoint()
 	if err != nil {
-		if err == errors.ErrCheckpointNotFound {
+		if errors.Is(err, checkpointerrors.ErrCheckpointNotFound) {
 			// no point in trying anything else
 			klog.InfoS("Failed to read data from checkpoint", "checkpoint", kubeletDeviceManagerCheckpoint, "err", err)
 			return nil

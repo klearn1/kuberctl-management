@@ -26,7 +26,6 @@ import (
 	"k8s.io/apiserver/pkg/apis/apiserver"
 	"k8s.io/apiserver/pkg/authentication/authenticator"
 	"k8s.io/apiserver/pkg/authentication/authenticatorfactory"
-	"k8s.io/apiserver/pkg/authorization/authorizer"
 	"k8s.io/apiserver/pkg/authorization/authorizerfactory"
 	"k8s.io/apiserver/pkg/server/dynamiccertificates"
 	genericoptions "k8s.io/apiserver/pkg/server/options"
@@ -114,10 +113,10 @@ func BuildAuthn(client authenticationclient.AuthenticationV1Interface, authn kub
 }
 
 // BuildAuthz creates an authorizer compatible with the kubelet's needs
-func BuildAuthz(client authorizationclient.AuthorizationV1Interface, authz kubeletconfig.KubeletAuthorization) (authorizer.Authorizer, error) {
+func BuildAuthz(client authorizationclient.AuthorizationV1Interface, authz kubeletconfig.KubeletAuthorization) (server.NodeAuthorizer, error) {
 	switch authz.Mode {
 	case kubeletconfig.KubeletAuthorizationModeAlwaysAllow:
-		return authorizerfactory.NewAlwaysAllowAuthorizer(), nil
+		return server.NewNodeAuthorizer(authorizerfactory.NewAlwaysAllowAuthorizer()), nil
 
 	case kubeletconfig.KubeletAuthorizationModeWebhook:
 		if client == nil {
@@ -129,7 +128,11 @@ func BuildAuthz(client authorizationclient.AuthorizationV1Interface, authz kubel
 			DenyCacheTTL:              authz.Webhook.CacheUnauthorizedTTL.Duration,
 			WebhookRetryBackoff:       genericoptions.DefaultAuthWebhookRetryBackoff(),
 		}
-		return authorizerConfig.New()
+		sarAuthorizer, err := authorizerConfig.New()
+		if err != nil {
+			return nil, err
+		}
+		return server.NewNodeAuthorizer(sarAuthorizer), nil
 
 	case "":
 		return nil, fmt.Errorf("no authorization mode specified")

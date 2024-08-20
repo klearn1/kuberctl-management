@@ -54,6 +54,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/authentication/authenticator"
+	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	"k8s.io/apiserver/pkg/server/healthz"
 	"k8s.io/apiserver/pkg/server/httplog"
@@ -101,6 +102,8 @@ const (
 	checkpointPath      = "/checkpoint/"
 	pprofBasePath       = "/debug/pprof/"
 	debugFlagPath       = "/debug/flags/v"
+	podsPath            = "/pods/"
+	healthzPath         = "/healthz/"
 )
 
 // Server is a http.Handler which exposes kubelet functionality over HTTP.
@@ -240,11 +243,19 @@ func ListenAndServePodResources(endpoint string, providers podresources.PodResou
 	}
 }
 
+type NodeRequestAttributesGetter interface {
+	GetRequestAttributes(u user.Info, r *http.Request) []authorizer.Attributes
+}
+
+type NodeAuthorizer interface {
+	Authorize(ctx context.Context, attr []authorizer.Attributes) (decision authorizer.Decision, reason string, err error)
+}
+
 // AuthInterface contains all methods required by the auth filters
 type AuthInterface interface {
 	authenticator.Request
-	authorizer.RequestAttributesGetter
-	authorizer.Authorizer
+	NodeRequestAttributesGetter
+	NodeAuthorizer
 }
 
 // HostInterface contains all the kubelet methods required by the server.
@@ -320,15 +331,18 @@ func (s *Server) InstallAuthFilter() {
 
 		// Authorize
 		decision, _, err := s.auth.Authorize(req.Request.Context(), attrs)
+		// Note: In the case of error or logging we only use the first attibute
+		// because the first attibute always uses the most fine-grained
+		// subresource.
 		if err != nil {
-			klog.ErrorS(err, "Authorization error", "user", attrs.GetUser().GetName(), "verb", attrs.GetVerb(), "resource", attrs.GetResource(), "subresource", attrs.GetSubresource())
-			msg := fmt.Sprintf("Authorization error (user=%s, verb=%s, resource=%s, subresource=%s)", attrs.GetUser().GetName(), attrs.GetVerb(), attrs.GetResource(), attrs.GetSubresource())
+			klog.ErrorS(err, "Authorization error", "user", attrs[0].GetUser().GetName(), "verb", attrs[0].GetVerb(), "resource", attrs[0].GetResource(), "subresource", attrs[0].GetSubresource())
+			msg := fmt.Sprintf("Authorization error (user=%s, verb=%s, resource=%s, subresource=%s)", attrs[0].GetUser().GetName(), attrs[0].GetVerb(), attrs[0].GetResource(), attrs[0].GetSubresource())
 			resp.WriteErrorString(http.StatusInternalServerError, msg)
 			return
 		}
 		if decision != authorizer.DecisionAllow {
-			klog.V(2).InfoS("Forbidden", "user", attrs.GetUser().GetName(), "verb", attrs.GetVerb(), "resource", attrs.GetResource(), "subresource", attrs.GetSubresource())
-			msg := fmt.Sprintf("Forbidden (user=%s, verb=%s, resource=%s, subresource=%s)", attrs.GetUser().GetName(), attrs.GetVerb(), attrs.GetResource(), attrs.GetSubresource())
+			klog.V(2).InfoS("Forbidden", "user", attrs[0].GetUser().GetName(), "verb", attrs[0].GetVerb(), "resource", attrs[0].GetResource(), "subresource", attrs[0].GetSubresource())
+			msg := fmt.Sprintf("Forbidden (user=%s, verb=%s, resource=%s, subresource=%s)", attrs[0].GetUser().GetName(), attrs[0].GetVerb(), attrs[0].GetResource(), attrs[0].GetSubresource())
 			resp.WriteErrorString(http.StatusForbidden, msg)
 			return
 		}

@@ -377,6 +377,14 @@ const (
 	// fallback to using it's cgroupDriver option.
 	KubeletCgroupDriverFromCRI featuregate.Feature = "KubeletCgroupDriverFromCRI"
 
+	// owner: @vinayakankugoyal
+	// kep: http://kep.k8s.io/2862
+	// alpha: v1.32
+	//
+	// Enable fine-grained kubelet API authorization for webhook based
+	// authorization.
+	KubeletFineGrainedAuthz featuregate.Feature = "KubeletFineGrainedAuthz"
+
 	// owner: @AkihiroSuda
 	// alpha: v1.22
 	//
@@ -1093,6 +1101,8 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 	JobSuccessPolicy: {Default: true, PreRelease: featuregate.Beta},
 
 	KubeletCgroupDriverFromCRI: {Default: true, PreRelease: featuregate.Beta},
+
+	KubeletFineGrainedAuthz: {Default: false, PreRelease: featuregate.Alpha},
 
 	KubeletInUserNamespace: {Default: false, PreRelease: featuregate.Alpha},
 

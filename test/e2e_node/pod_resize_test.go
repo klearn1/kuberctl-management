@@ -34,13 +34,17 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	clientset "k8s.io/client-go/kubernetes"
 	podutil "k8s.io/kubernetes/pkg/api/v1/pod"
+	kubeletconfig "k8s.io/kubernetes/pkg/kubelet/apis/config"
 	kubecm "k8s.io/kubernetes/pkg/kubelet/cm"
+	"k8s.io/kubernetes/pkg/kubelet/cm/cpumanager"
 	"k8s.io/kubernetes/test/e2e/feature"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
 	e2eskipper "k8s.io/kubernetes/test/e2e/framework/skipper"
 	testutils "k8s.io/kubernetes/test/utils"
 	imageutils "k8s.io/kubernetes/test/utils/image"
+	admissionapi "k8s.io/pod-security-admission/api"
+	"k8s.io/utils/cpuset"
 )
 
 const (
@@ -418,18 +422,75 @@ func waitForPodResizeActuation(ctx context.Context, f *framework.Framework, c cl
 	return resizedPod
 }
 
+func cpuManagerPolicyKubeletConfig(ctx context.Context, f *framework.Framework, oldCfg *kubeletconfig.KubeletConfiguration, cpuManagerPolicyName string, cpuManagerPolicyOptions map[string]string) {
+	if cpuManagerPolicyName != "" {
+		if cpuManagerPolicyOptions != nil {
+			var cpuAlloc int64
+			fullCPUsOnlyOpt := fmt.Sprintf("option=%s", cpuManagerPolicyName)
+			_, cpuAlloc, _ = getLocalNodeCPUDetails(ctx, f)
+			smtLevel := getSMTLevel()
+
+			// strict SMT alignment is trivially verified and granted on non-SMT systems
+			if smtLevel < 2 {
+				e2eskipper.Skipf("Skipping Pod Resize along side CPU Manager %s tests since SMT disabled", fullCPUsOnlyOpt)
+			}
+
+			// our tests want to allocate a full core, so we need at last 2*2=4 virtual cpus
+			if cpuAlloc < int64(smtLevel*2) {
+				e2eskipper.Skipf("Skipping Pod resize along side CPU Manager %s tests since the CPU capacity < 4", fullCPUsOnlyOpt)
+			}
+
+			framework.Logf("SMT level %d", smtLevel)
+
+			// TODO: we assume the first available CPUID is 0, which is pretty fair, but we should probably
+			// check what we do have in the node.
+			newCfg := configureCPUManagerInKubelet(oldCfg,
+				&cpuManagerKubeletArguments{
+					policyName:              cpuManagerPolicyName,
+					reservedSystemCPUs:      cpuset.New(0),
+					enableCPUManagerOptions: true,
+					options:                 cpuManagerPolicyOptions,
+				},
+			)
+			updateKubeletConfig(ctx, f, newCfg, true)
+		} else {
+			var cpuCap int64
+			cpuCap, _, _ = getLocalNodeCPUDetails(ctx, f)
+			// Skip CPU Manager tests altogether if the CPU capacity < 2.
+			if cpuCap < 2 {
+				e2eskipper.Skipf("Skipping Pod Resize alongside CPU Manager tests since the CPU capacity < 2")
+			}
+			// Enable CPU Manager in the kubelet.
+			newCfg := configureCPUManagerInKubelet(oldCfg, &cpuManagerKubeletArguments{
+				policyName:         cpuManagerPolicyName,
+				reservedSystemCPUs: cpuset.CPUSet{},
+			})
+			updateKubeletConfig(ctx, f, newCfg, true)
+		}
+	}
+}
+
 func doPodResizeTests() {
 	f := framework.NewDefaultFramework("pod-resize-test")
+	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
 	var podClient *e2epod.PodClient
-	ginkgo.BeforeEach(func() {
+	var oldCfg *kubeletconfig.KubeletConfiguration
+	ginkgo.BeforeEach(func(ctx context.Context) {
+		var err error
 		podClient = e2epod.NewPodClient(f)
+		if oldCfg == nil {
+			oldCfg, err = getCurrentKubeletConfig(ctx)
+			framework.ExpectNoError(err)
+		}
 	})
 
 	type testCase struct {
-		name        string
-		containers  []TestContainerInfo
-		patchString string
-		expected    []TestContainerInfo
+		name                    string
+		containers              []TestContainerInfo
+		patchString             string
+		expected                []TestContainerInfo
+		cpuManagerPolicyName    string
+		cpuManagerPolicyOptions map[string]string
 	}
 
 	noRestart := v1.NotRequired
@@ -1131,6 +1192,1857 @@ func doPodResizeTests() {
 				},
 			},
 		},
+		{
+			name: "Guaranteed QoS pod, one container - increase CPU & memory, alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "100m", MemReq: "200Mi", MemLim: "200Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"200m","memory":"400Mi"},"limits":{"cpu":"200m","memory":"400Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "200m", MemReq: "400Mi", MemLim: "400Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Guaranteed QoS pod, one container - decrease CPU & memory, alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "300m", CPULim: "300m", MemReq: "500Mi", MemLim: "500Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"100m","memory":"250Mi"},"limits":{"cpu":"100m","memory":"250Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "100m", MemReq: "250Mi", MemLim: "250Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Guaranteed QoS pod, one container - increase CPU & decrease memory, alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "100m", MemReq: "200Mi", MemLim: "200Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"200m","memory":"100Mi"},"limits":{"cpu":"200m","memory":"100Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "200m", MemReq: "100Mi", MemLim: "100Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Guaranteed QoS pod, one container - decrease CPU & increase memory, alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "100m", MemReq: "200Mi", MemLim: "200Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"50m","memory":"300Mi"},"limits":{"cpu":"50m","memory":"300Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "50m", CPULim: "50m", MemReq: "300Mi", MemLim: "300Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Guaranteed QoS pod, three containers (c1, c2, c3) - increase: CPU (c1,c3), memory (c2) ; decrease: CPU (c2), memory (c1,c3), alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "100m", MemReq: "100Mi", MemLim: "100Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+				{
+					Name:      "c2",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "200m", MemReq: "200Mi", MemLim: "200Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+				{
+					Name:      "c3",
+					Resources: &ContainerResources{CPUReq: "300m", CPULim: "300m", MemReq: "300Mi", MemLim: "300Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"140m","memory":"50Mi"},"limits":{"cpu":"140m","memory":"50Mi"}}},
+						{"name":"c2", "resources":{"requests":{"cpu":"150m","memory":"240Mi"},"limits":{"cpu":"150m","memory":"240Mi"}}},
+						{"name":"c3", "resources":{"requests":{"cpu":"340m","memory":"250Mi"},"limits":{"cpu":"340m","memory":"250Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "140m", CPULim: "140m", MemReq: "50Mi", MemLim: "50Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+				{
+					Name:      "c2",
+					Resources: &ContainerResources{CPUReq: "150m", CPULim: "150m", MemReq: "240Mi", MemLim: "240Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+				{
+					Name:      "c3",
+					Resources: &ContainerResources{CPUReq: "340m", CPULim: "340m", MemReq: "250Mi", MemLim: "250Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - decrease memory requests only, alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"memory":"200Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "200Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - decrease memory limits only, alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"limits":{"memory":"400Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "250Mi", MemLim: "400Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - increase memory requests only, alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"memory":"300Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "300Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - increase memory limits only, alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"limits":{"memory":"600Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "250Mi", MemLim: "600Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - decrease CPU requests only, alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"100m"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "400m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - decrease CPU limits only, alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"limits":{"cpu":"300m"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "300m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - increase CPU requests only, alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"150m"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "150m", CPULim: "200m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - increase CPU limits only, alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"limits":{"cpu":"500m"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "500m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - decrease CPU requests and limits, alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"100m"},"limits":{"cpu":"200m"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - increase CPU requests and limits, alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"200m"},"limits":{"cpu":"400m"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - decrease CPU requests and increase CPU limits, alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"100m"},"limits":{"cpu":"500m"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "500m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - increase CPU requests and decrease CPU limits, alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "400m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"200m"},"limits":{"cpu":"300m"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "300m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - decrease memory requests and limits, alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "200Mi", MemLim: "400Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"memory":"100Mi"},"limits":{"memory":"300Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "300Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - increase memory requests and limits, alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "200Mi", MemLim: "400Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"memory":"300Mi"},"limits":{"memory":"500Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "300Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - decrease memory requests and increase memory limits, alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "200Mi", MemLim: "400Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"memory":"100Mi"},"limits":{"memory":"500Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - increase memory requests and decrease memory limits, alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "200Mi", MemLim: "400Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"memory":"300Mi"},"limits":{"memory":"300Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "300Mi", MemLim: "300Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - decrease CPU requests and increase memory limits, alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "200Mi", MemLim: "400Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"100m"},"limits":{"memory":"500Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "400m", MemReq: "200Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - increase CPU requests and decrease memory limits, alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "400m", MemReq: "200Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"200m"},"limits":{"memory":"400Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "200Mi", MemLim: "400Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - decrease memory requests and increase CPU limits, alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "200Mi", MemLim: "400Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"memory":"100Mi"},"limits":{"cpu":"300m"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "300m", MemReq: "100Mi", MemLim: "400Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - increase memory requests and decrease CPU limits, alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "200Mi", MemLim: "400Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"memory":"300Mi"},"limits":{"cpu":"300m"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "300m", MemReq: "300Mi", MemLim: "400Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests - decrease memory request, alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", MemReq: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"memory":"400Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", MemReq: "400Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Guaranteed QoS pod, one container - increase CPU (NotRequired) & memory (RestartContainer), alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "100m", MemReq: "200Mi", MemLim: "200Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &doRestart,
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"200m","memory":"400Mi"},"limits":{"cpu":"200m","memory":"400Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:         "c1",
+					Resources:    &ContainerResources{CPUReq: "200m", CPULim: "200m", MemReq: "400Mi", MemLim: "400Mi"},
+					CPUPolicy:    &noRestart,
+					MemPolicy:    &doRestart,
+					RestartCount: 1,
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable QoS pod, one container - decrease CPU (RestartContainer) & memory (NotRequired), alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "200Mi", MemLim: "400Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &noRestart,
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"50m","memory":"100Mi"},"limits":{"cpu":"100m","memory":"200Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:         "c1",
+					Resources:    &ContainerResources{CPUReq: "50m", CPULim: "100m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy:    &doRestart,
+					MemPolicy:    &noRestart,
+					RestartCount: 1,
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable QoS pod, three containers - increase c1 resources, no change for c2, decrease c3 resources (no net change for pod), alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+				{
+					Name:      "c2",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "300m", MemReq: "200Mi", MemLim: "300Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &doRestart,
+				},
+				{
+					Name:      "c3",
+					Resources: &ContainerResources{CPUReq: "300m", CPULim: "400m", MemReq: "300Mi", MemLim: "400Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"150m","memory":"150Mi"},"limits":{"cpu":"250m","memory":"250Mi"}}},
+						{"name":"c3", "resources":{"requests":{"cpu":"250m","memory":"250Mi"},"limits":{"cpu":"350m","memory":"350Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "150m", CPULim: "250m", MemReq: "150Mi", MemLim: "250Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+				{
+					Name:      "c2",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "300m", MemReq: "200Mi", MemLim: "300Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &doRestart,
+				},
+				{
+					Name:      "c3",
+					Resources: &ContainerResources{CPUReq: "250m", CPULim: "350m", MemReq: "250Mi", MemLim: "350Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable QoS pod, three containers - decrease c1 resources, increase c2 resources, no change for c3 (net increase for pod), alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+				{
+					Name:      "c2",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "300m", MemReq: "200Mi", MemLim: "300Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &doRestart,
+				},
+				{
+					Name:      "c3",
+					Resources: &ContainerResources{CPUReq: "300m", CPULim: "400m", MemReq: "300Mi", MemLim: "400Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"50m","memory":"50Mi"},"limits":{"cpu":"150m","memory":"150Mi"}}},
+						{"name":"c2", "resources":{"requests":{"cpu":"350m","memory":"350Mi"},"limits":{"cpu":"450m","memory":"450Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "50m", CPULim: "150m", MemReq: "50Mi", MemLim: "150Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+				{
+					Name:         "c2",
+					Resources:    &ContainerResources{CPUReq: "350m", CPULim: "450m", MemReq: "350Mi", MemLim: "450Mi"},
+					CPUPolicy:    &noRestart,
+					MemPolicy:    &doRestart,
+					RestartCount: 1,
+				},
+				{
+					Name:      "c3",
+					Resources: &ContainerResources{CPUReq: "300m", CPULim: "400m", MemReq: "300Mi", MemLim: "400Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable QoS pod, three containers - no change for c1, increase c2 resources, decrease c3 (net decrease for pod), alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &doRestart,
+				},
+				{
+					Name:      "c2",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "300m", MemReq: "200Mi", MemLim: "300Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &noRestart,
+				},
+				{
+					Name:      "c3",
+					Resources: &ContainerResources{CPUReq: "300m", CPULim: "400m", MemReq: "300Mi", MemLim: "400Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &doRestart,
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c2", "resources":{"requests":{"cpu":"250m","memory":"250Mi"},"limits":{"cpu":"350m","memory":"350Mi"}}},
+						{"name":"c3", "resources":{"requests":{"cpu":"100m","memory":"100Mi"},"limits":{"cpu":"200m","memory":"200Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &doRestart,
+				},
+				{
+					Name:         "c2",
+					Resources:    &ContainerResources{CPUReq: "250m", CPULim: "350m", MemReq: "250Mi", MemLim: "350Mi"},
+					CPUPolicy:    &noRestart,
+					MemPolicy:    &noRestart,
+					RestartCount: 1,
+				},
+				{
+					Name:         "c3",
+					Resources:    &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy:    &doRestart,
+					MemPolicy:    &doRestart,
+					RestartCount: 1,
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Guaranteed QoS pod, one container - increase CPU & memory, alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "100m", MemReq: "200Mi", MemLim: "200Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"200m","memory":"400Mi"},"limits":{"cpu":"200m","memory":"400Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "200m", MemReq: "400Mi", MemLim: "400Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Guaranteed QoS pod, one container - decrease CPU & memory, alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "300m", CPULim: "300m", MemReq: "500Mi", MemLim: "500Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"100m","memory":"250Mi"},"limits":{"cpu":"100m","memory":"250Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "100m", MemReq: "250Mi", MemLim: "250Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Guaranteed QoS pod, one container - increase CPU & decrease memory, alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "100m", MemReq: "200Mi", MemLim: "200Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"200m","memory":"100Mi"},"limits":{"cpu":"200m","memory":"100Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "200m", MemReq: "100Mi", MemLim: "100Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Guaranteed QoS pod, one container - decrease CPU & increase memory, alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "100m", MemReq: "200Mi", MemLim: "200Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"50m","memory":"300Mi"},"limits":{"cpu":"50m","memory":"300Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "50m", CPULim: "50m", MemReq: "300Mi", MemLim: "300Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Guaranteed QoS pod, three containers (c1, c2, c3) - increase: CPU (c1,c3), memory (c2) ; decrease: CPU (c2), memory (c1,c3), alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "100m", MemReq: "100Mi", MemLim: "100Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+				{
+					Name:      "c2",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "200m", MemReq: "200Mi", MemLim: "200Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+				{
+					Name:      "c3",
+					Resources: &ContainerResources{CPUReq: "300m", CPULim: "300m", MemReq: "300Mi", MemLim: "300Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"140m","memory":"50Mi"},"limits":{"cpu":"140m","memory":"50Mi"}}},
+						{"name":"c2", "resources":{"requests":{"cpu":"150m","memory":"240Mi"},"limits":{"cpu":"150m","memory":"240Mi"}}},
+						{"name":"c3", "resources":{"requests":{"cpu":"340m","memory":"250Mi"},"limits":{"cpu":"340m","memory":"250Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "140m", CPULim: "140m", MemReq: "50Mi", MemLim: "50Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+				{
+					Name:      "c2",
+					Resources: &ContainerResources{CPUReq: "150m", CPULim: "150m", MemReq: "240Mi", MemLim: "240Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+				{
+					Name:      "c3",
+					Resources: &ContainerResources{CPUReq: "340m", CPULim: "340m", MemReq: "250Mi", MemLim: "250Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - decrease memory requests only, alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"memory":"200Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "200Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - decrease memory limits only, alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"limits":{"memory":"400Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "250Mi", MemLim: "400Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable and Guaranteed QoS pod, three containers - no change for c1, increase c2 resources, decrease c3 (net increase for pod)",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &doRestart,
+				},
+				{
+					Name:      "c2",
+					Resources: &ContainerResources{CPUReq: "2", CPULim: "2", MemReq: "200Mi", MemLim: "300Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &noRestart,
+				},
+				{
+					Name:      "c3",
+					Resources: &ContainerResources{CPUReq: "300m", CPULim: "400m", MemReq: "300Mi", MemLim: "400Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &doRestart,
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c2", "resources":{"requests":{"cpu":"4","memory":"250Mi"},"limits":{"cpu":"4","memory":"350Mi"}}},
+						{"name":"c3", "resources":{"requests":{"cpu":"100m","memory":"100Mi"},"limits":{"cpu":"200m","memory":"200Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &doRestart,
+				},
+				{
+					Name:         "c2",
+					Resources:    &ContainerResources{CPUReq: "4", CPULim: "4", MemReq: "250Mi", MemLim: "350Mi"},
+					CPUPolicy:    &noRestart,
+					MemPolicy:    &noRestart,
+					RestartCount: 1,
+				},
+				{
+					Name:         "c3",
+					Resources:    &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy:    &doRestart,
+					MemPolicy:    &doRestart,
+					RestartCount: 1,
+				},
+			},
+		},
+		{
+			name: "Burstable and Guaranteed QoS pod, three containers - no change for c1, increase c2 resources, decrease c3 (net increase for pod), alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &doRestart,
+				},
+				{
+					Name:      "c2",
+					Resources: &ContainerResources{CPUReq: "2", CPULim: "2", MemReq: "200Mi", MemLim: "300Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &noRestart,
+				},
+				{
+					Name:      "c3",
+					Resources: &ContainerResources{CPUReq: "300m", CPULim: "400m", MemReq: "300Mi", MemLim: "400Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &doRestart,
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c2", "resources":{"requests":{"cpu":"4","memory":"250Mi"},"limits":{"cpu":"4","memory":"350Mi"}}},
+						{"name":"c3", "resources":{"requests":{"cpu":"100m","memory":"100Mi"},"limits":{"cpu":"200m","memory":"200Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &doRestart,
+				},
+				{
+					Name:         "c2",
+					Resources:    &ContainerResources{CPUReq: "4", CPULim: "4", MemReq: "250Mi", MemLim: "350Mi"},
+					CPUPolicy:    &noRestart,
+					MemPolicy:    &noRestart,
+					RestartCount: 1,
+				},
+				{
+					Name:         "c3",
+					Resources:    &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy:    &doRestart,
+					MemPolicy:    &doRestart,
+					RestartCount: 1,
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable and Guaranteed QoS pod, three containers - no change for c1, decrease c2 resources, decrease c3 (net decrease for pod)",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &doRestart,
+				},
+				{
+					Name:      "c2",
+					Resources: &ContainerResources{CPUReq: "4", CPULim: "4", MemReq: "200Mi", MemLim: "300Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &noRestart,
+				},
+				{
+					Name:      "c3",
+					Resources: &ContainerResources{CPUReq: "300m", CPULim: "400m", MemReq: "300Mi", MemLim: "400Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &doRestart,
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c2", "resources":{"requests":{"cpu":"1","memory":"250Mi"},"limits":{"cpu":"1","memory":"350Mi"}}},
+						{"name":"c3", "resources":{"requests":{"cpu":"100m","memory":"100Mi"},"limits":{"cpu":"200m","memory":"200Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &doRestart,
+				},
+				{
+					Name:         "c2",
+					Resources:    &ContainerResources{CPUReq: "1", CPULim: "1", MemReq: "250Mi", MemLim: "350Mi"},
+					CPUPolicy:    &noRestart,
+					MemPolicy:    &noRestart,
+					RestartCount: 1,
+				},
+				{
+					Name:         "c3",
+					Resources:    &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy:    &doRestart,
+					MemPolicy:    &doRestart,
+					RestartCount: 1,
+				},
+			},
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - increase memory requests only, alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"memory":"300Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "300Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - increase memory limits only, alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"limits":{"memory":"600Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "250Mi", MemLim: "600Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - decrease CPU requests only, alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"100m"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "400m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - decrease CPU limits only, alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"limits":{"cpu":"300m"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "300m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - increase CPU requests only, alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"150m"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "150m", CPULim: "200m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - increase CPU limits only, alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"limits":{"cpu":"500m"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "500m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - decrease CPU requests and limits, alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"100m"},"limits":{"cpu":"200m"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - increase CPU requests and limits, alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"200m"},"limits":{"cpu":"400m"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - decrease CPU requests and increase CPU limits, alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"100m"},"limits":{"cpu":"500m"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "500m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - increase CPU requests and decrease CPU limits, alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "400m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"200m"},"limits":{"cpu":"300m"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "300m", MemReq: "250Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - decrease memory requests and limits, alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "200Mi", MemLim: "400Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"memory":"100Mi"},"limits":{"memory":"300Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "300Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - increase memory requests and limits, alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "200Mi", MemLim: "400Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"memory":"300Mi"},"limits":{"memory":"500Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "300Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - decrease memory requests and increase memory limits, alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "200Mi", MemLim: "400Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"memory":"100Mi"},"limits":{"memory":"500Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - increase memory requests and decrease memory limits, alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "200Mi", MemLim: "400Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"memory":"300Mi"},"limits":{"memory":"300Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "300Mi", MemLim: "300Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - decrease CPU requests and increase memory limits, alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "200Mi", MemLim: "400Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"100m"},"limits":{"memory":"500Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "400m", MemReq: "200Mi", MemLim: "500Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - increase CPU requests and decrease memory limits, alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "400m", MemReq: "200Mi", MemLim: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"200m"},"limits":{"memory":"400Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "200Mi", MemLim: "400Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - decrease memory requests and increase CPU limits, alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "200Mi", MemLim: "400Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"memory":"100Mi"},"limits":{"cpu":"300m"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "300m", MemReq: "100Mi", MemLim: "400Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests + limits - increase memory requests and decrease CPU limits, alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "400m", MemReq: "200Mi", MemLim: "400Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"memory":"300Mi"},"limits":{"cpu":"300m"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "300m", MemReq: "300Mi", MemLim: "400Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable QoS pod, one container with cpu & memory requests - decrease memory request, alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", MemReq: "500Mi"},
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"memory":"400Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "200m", MemReq: "400Mi"},
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Guaranteed QoS pod, one container - increase CPU (NotRequired) & memory (RestartContainer), alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "100m", MemReq: "200Mi", MemLim: "200Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &doRestart,
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"200m","memory":"400Mi"},"limits":{"cpu":"200m","memory":"400Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:         "c1",
+					Resources:    &ContainerResources{CPUReq: "200m", CPULim: "200m", MemReq: "400Mi", MemLim: "400Mi"},
+					CPUPolicy:    &noRestart,
+					MemPolicy:    &doRestart,
+					RestartCount: 1,
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable QoS pod, one container - decrease CPU (RestartContainer) & memory (NotRequired), alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "200Mi", MemLim: "400Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &noRestart,
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"50m","memory":"100Mi"},"limits":{"cpu":"100m","memory":"200Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:         "c1",
+					Resources:    &ContainerResources{CPUReq: "50m", CPULim: "100m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy:    &doRestart,
+					MemPolicy:    &noRestart,
+					RestartCount: 1,
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable QoS pod, three containers - increase c1 resources, no change for c2, decrease c3 resources (no net change for pod), alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+				{
+					Name:      "c2",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "300m", MemReq: "200Mi", MemLim: "300Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &doRestart,
+				},
+				{
+					Name:      "c3",
+					Resources: &ContainerResources{CPUReq: "300m", CPULim: "400m", MemReq: "300Mi", MemLim: "400Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"150m","memory":"150Mi"},"limits":{"cpu":"250m","memory":"250Mi"}}},
+						{"name":"c3", "resources":{"requests":{"cpu":"250m","memory":"250Mi"},"limits":{"cpu":"350m","memory":"350Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "150m", CPULim: "250m", MemReq: "150Mi", MemLim: "250Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+				{
+					Name:      "c2",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "300m", MemReq: "200Mi", MemLim: "300Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &doRestart,
+				},
+				{
+					Name:      "c3",
+					Resources: &ContainerResources{CPUReq: "250m", CPULim: "350m", MemReq: "250Mi", MemLim: "350Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable QoS pod, three containers - decrease c1 resources, increase c2 resources, no change for c3 (net increase for pod), alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+				{
+					Name:      "c2",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "300m", MemReq: "200Mi", MemLim: "300Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &doRestart,
+				},
+				{
+					Name:      "c3",
+					Resources: &ContainerResources{CPUReq: "300m", CPULim: "400m", MemReq: "300Mi", MemLim: "400Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c1", "resources":{"requests":{"cpu":"50m","memory":"50Mi"},"limits":{"cpu":"150m","memory":"150Mi"}}},
+						{"name":"c2", "resources":{"requests":{"cpu":"350m","memory":"350Mi"},"limits":{"cpu":"450m","memory":"450Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "50m", CPULim: "150m", MemReq: "50Mi", MemLim: "150Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+				{
+					Name:         "c2",
+					Resources:    &ContainerResources{CPUReq: "350m", CPULim: "450m", MemReq: "350Mi", MemLim: "450Mi"},
+					CPUPolicy:    &noRestart,
+					MemPolicy:    &doRestart,
+					RestartCount: 1,
+				},
+				{
+					Name:      "c3",
+					Resources: &ContainerResources{CPUReq: "300m", CPULim: "400m", MemReq: "300Mi", MemLim: "400Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &noRestart,
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable QoS pod, three containers - no change for c1, increase c2 resources, decrease c3 (net decrease for pod), alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &doRestart,
+				},
+				{
+					Name:      "c2",
+					Resources: &ContainerResources{CPUReq: "200m", CPULim: "300m", MemReq: "200Mi", MemLim: "300Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &noRestart,
+				},
+				{
+					Name:      "c3",
+					Resources: &ContainerResources{CPUReq: "300m", CPULim: "400m", MemReq: "300Mi", MemLim: "400Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &doRestart,
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c2", "resources":{"requests":{"cpu":"250m","memory":"250Mi"},"limits":{"cpu":"350m","memory":"350Mi"}}},
+						{"name":"c3", "resources":{"requests":{"cpu":"100m","memory":"100Mi"},"limits":{"cpu":"200m","memory":"200Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &doRestart,
+				},
+				{
+					Name:         "c2",
+					Resources:    &ContainerResources{CPUReq: "250m", CPULim: "350m", MemReq: "250Mi", MemLim: "350Mi"},
+					CPUPolicy:    &noRestart,
+					MemPolicy:    &noRestart,
+					RestartCount: 1,
+				},
+				{
+					Name:         "c3",
+					Resources:    &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy:    &doRestart,
+					MemPolicy:    &doRestart,
+					RestartCount: 1,
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable and Guaranteed QoS pod, three containers - no change for c1, increase c2 resources, decrease c3 (net increase for pod), alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &doRestart,
+				},
+				{
+					Name:      "c2",
+					Resources: &ContainerResources{CPUReq: "2", CPULim: "2", MemReq: "200Mi", MemLim: "300Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &noRestart,
+				},
+				{
+					Name:      "c3",
+					Resources: &ContainerResources{CPUReq: "300m", CPULim: "400m", MemReq: "300Mi", MemLim: "400Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &doRestart,
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c2", "resources":{"requests":{"cpu":"3","memory":"250Mi"},"limits":{"cpu":"3","memory":"350Mi"}}},
+						{"name":"c3", "resources":{"requests":{"cpu":"100m","memory":"100Mi"},"limits":{"cpu":"200m","memory":"200Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &doRestart,
+				},
+				{
+					Name:         "c2",
+					Resources:    &ContainerResources{CPUReq: "3", CPULim: "3", MemReq: "250Mi", MemLim: "350Mi"},
+					CPUPolicy:    &noRestart,
+					MemPolicy:    &noRestart,
+					RestartCount: 1,
+				},
+				{
+					Name:         "c3",
+					Resources:    &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy:    &doRestart,
+					MemPolicy:    &doRestart,
+					RestartCount: 1,
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
+		{
+			name: "Burstable and Guaranteed QoS pod, three containers - no change for c1, decrease c2 resources, decrease c3 (net decrease for pod), alongside CPU Manager Static Policy without any Policy Options",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &doRestart,
+				},
+				{
+					Name:      "c2",
+					Resources: &ContainerResources{CPUReq: "2", CPULim: "2", MemReq: "200Mi", MemLim: "300Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &noRestart,
+				},
+				{
+					Name:      "c3",
+					Resources: &ContainerResources{CPUReq: "300m", CPULim: "400m", MemReq: "300Mi", MemLim: "400Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &doRestart,
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c2", "resources":{"requests":{"cpu":"1","memory":"250Mi"},"limits":{"cpu":"1","memory":"350Mi"}}},
+						{"name":"c3", "resources":{"requests":{"cpu":"100m","memory":"100Mi"},"limits":{"cpu":"200m","memory":"200Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &doRestart,
+				},
+				{
+					Name:         "c2",
+					Resources:    &ContainerResources{CPUReq: "1", CPULim: "1", MemReq: "250Mi", MemLim: "350Mi"},
+					CPUPolicy:    &noRestart,
+					MemPolicy:    &noRestart,
+					RestartCount: 1,
+				},
+				{
+					Name:         "c3",
+					Resources:    &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy:    &doRestart,
+					MemPolicy:    &doRestart,
+					RestartCount: 1,
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+		},
+		{
+			name: "Burstable and Guaranteed QoS pod, three containers - no change for c1, decrease c2 resources, decrease c3 (net decrease for pod), alongside CPU Manager Static Policy with FullPCPUsOnlyOption",
+			containers: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &doRestart,
+				},
+				{
+					Name:      "c2",
+					Resources: &ContainerResources{CPUReq: "4", CPULim: "4", MemReq: "200Mi", MemLim: "300Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &noRestart,
+				},
+				{
+					Name:      "c3",
+					Resources: &ContainerResources{CPUReq: "300m", CPULim: "400m", MemReq: "300Mi", MemLim: "400Mi"},
+					CPUPolicy: &noRestart,
+					MemPolicy: &doRestart,
+				},
+			},
+			patchString: `{"spec":{"containers":[
+						{"name":"c2", "resources":{"requests":{"cpu":"1","memory":"250Mi"},"limits":{"cpu":"1","memory":"350Mi"}}},
+						{"name":"c3", "resources":{"requests":{"cpu":"100m","memory":"100Mi"},"limits":{"cpu":"200m","memory":"200Mi"}}}
+					]}}`,
+			expected: []TestContainerInfo{
+				{
+					Name:      "c1",
+					Resources: &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy: &doRestart,
+					MemPolicy: &doRestart,
+				},
+				{
+					Name:         "c2",
+					Resources:    &ContainerResources{CPUReq: "1", CPULim: "1", MemReq: "250Mi", MemLim: "350Mi"},
+					CPUPolicy:    &noRestart,
+					MemPolicy:    &noRestart,
+					RestartCount: 1,
+				},
+				{
+					Name:         "c3",
+					Resources:    &ContainerResources{CPUReq: "100m", CPULim: "200m", MemReq: "100Mi", MemLim: "200Mi"},
+					CPUPolicy:    &doRestart,
+					MemPolicy:    &doRestart,
+					RestartCount: 1,
+				},
+			},
+			cpuManagerPolicyName: string(cpumanager.PolicyStatic),
+			cpuManagerPolicyOptions: map[string]string{
+				cpumanager.FullPCPUsOnlyOption: "true",
+			},
+		},
 	}
 
 	timeouts := framework.NewTimeoutContext()
@@ -1138,11 +3050,15 @@ func doPodResizeTests() {
 	for idx := range tests {
 		tc := tests[idx]
 		ginkgo.It(tc.name, func(ctx context.Context) {
+
+			cpuManagerPolicyKubeletConfig(ctx, f, oldCfg, tests[idx].cpuManagerPolicyName, tests[idx].cpuManagerPolicyOptions)
+
 			ginkgo.By("waiting for the node to be ready", func() {
 				if !supportsInPlacePodVerticalScaling(ctx, f) || framework.NodeOSDistroIs("windows") || isRunningOnArm64() {
 					e2eskipper.Skipf("runtime does not support InPlacePodVerticalScaling -- skipping")
 				}
 			})
+
 			var testPod *v1.Pod
 			var patchedPod *v1.Pod
 			var pErr error
@@ -1198,6 +3114,11 @@ func doPodResizeTests() {
 			waitForAllContainerRemoval(ctx, newPod.Name, newPod.Namespace)
 		})
 	}
+
+	ginkgo.AfterEach(func(ctx context.Context) {
+		updateKubeletConfig(ctx, f, oldCfg, true)
+	})
+
 }
 
 func doPodResizeErrorTests() {

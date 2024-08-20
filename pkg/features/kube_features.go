@@ -762,6 +762,14 @@ const (
 	// Enables trafficDistribution field on Services.
 	ServiceTrafficDistribution featuregate.Feature = "ServiceTrafficDistribution"
 
+	// owner: @gjkim42 @SergeyKanzhelev @matthyx
+	// kep: http://kep.k8s.io/753
+	// kep: http://kep.k8s.io/4438
+	// alpha: v1.31
+	//
+	// Allows containers to restart during pod termination.
+	RestartContainerDuringTermination featuregate.Feature = "RestartContainerDuringTermination"
+
 	// owner: @gjkim42 @SergeyKanzhelev @matthyx @tzneal
 	// kep: http://kep.k8s.io/753
 	// alpha: v1.28
@@ -1187,6 +1195,9 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 	ServiceAccountTokenNodeBindingValidation: {Default: true, PreRelease: featuregate.Beta},
 
 	ServiceTrafficDistribution: {Default: true, PreRelease: featuregate.Beta},
+
+	// FIXME: Disable by default
+	RestartContainerDuringTermination: {Default: true, PreRelease: featuregate.Alpha},
 
 	SidecarContainers: {Default: true, PreRelease: featuregate.Beta},
 

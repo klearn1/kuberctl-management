@@ -867,19 +867,6 @@ func isPodUpdated(oldPod, newPod *v1.Pod) bool {
 	return !reflect.DeepEqual(strip(oldPod), strip(newPod))
 }
 
-func (p *PriorityQueue) updateInActiveQueue(logger klog.Logger, oldPod, newPod *v1.Pod, oldPodInfo *framework.QueuedPodInfo) bool {
-	exists := false
-	p.activeQ.underLock(func(unlockedActiveQ unlockedActiveQueuer) {
-		if pInfo, exists := unlockedActiveQ.Get(oldPodInfo); exists {
-			_ = pInfo.Update(newPod)
-			p.UpdateNominatedPod(logger, oldPod, pInfo.PodInfo)
-			unlockedActiveQ.AddOrUpdate(pInfo)
-			exists = true
-		}
-	})
-	return exists
-}
-
 // Update updates a pod in the active or backoff queue if present. Otherwise, it removes
 // the item from the unschedulable queue if pod is updated in a way that it may
 // become schedulable and adds the updated one to the active queue.
@@ -903,7 +890,8 @@ func (p *PriorityQueue) Update(logger klog.Logger, oldPod, newPod *v1.Pod) {
 	if oldPod != nil {
 		oldPodInfo := newQueuedPodInfoForLookup(oldPod)
 		// If the pod is already in the active queue, just update it there.
-		if exists := p.updateInActiveQueue(logger, oldPod, newPod, oldPodInfo); exists {
+		if pInfo := p.activeQ.update(newPod, oldPodInfo); pInfo != nil {
+			p.UpdateNominatedPod(logger, oldPod, pInfo.PodInfo)
 			return
 		}
 
@@ -973,15 +961,13 @@ func (p *PriorityQueue) Delete(pod *v1.Pod) {
 	defer p.lock.Unlock()
 	p.DeleteNominatedPodIfExists(pod)
 	pInfo := newQueuedPodInfoForLookup(pod)
-	p.activeQ.underLock(func(unlockedActiveQ unlockedActiveQueuer) {
-		if err := unlockedActiveQ.Delete(pInfo); err != nil {
-			// The item was probably not found in the activeQ.
-			p.podBackoffQ.Delete(pInfo)
-			if pInfo = p.unschedulablePods.get(pod); pInfo != nil {
-				p.unschedulablePods.delete(pod, pInfo.Gated)
-			}
+	if err := p.activeQ.delete(pInfo); err != nil {
+		// The item was probably not found in the activeQ.
+		p.podBackoffQ.Delete(pInfo)
+		if pInfo = p.unschedulablePods.get(pod); pInfo != nil {
+			p.unschedulablePods.delete(pod, pInfo.Gated)
 		}
-	})
+	}
 }
 
 // AssignedPodAdded is called when a bound pod is added. Creation of this pod
@@ -1182,8 +1168,8 @@ func (p *PriorityQueue) PendingPods() ([]*v1.Pod, string) {
 	return result, fmt.Sprintf(pendingPodsSummary, activeQLen, p.podBackoffQ.Len(), len(p.unschedulablePods.podInfoMap))
 }
 
-// Note: this function assumes the caller locks both p.lock.RLock and p.activeQ.getLock().RLock.
-func (p *PriorityQueue) nominatedPodToInfo(np PodRef, unlockedActiveQ unlockedActiveQueuer) *framework.PodInfo {
+// Note: this function assumes the caller locks both p.lock.RLock and p.activeQ.lock.RLock.
+func (p *PriorityQueue) nominatedPodToInfo(np PodRef, unlockedActiveQ unlockedActiveQueueReader) *framework.PodInfo {
 	pod := np.ToPod()
 	pInfoLookup := newQueuedPodInfoForLookup(pod)
 
@@ -1209,7 +1195,7 @@ func (p *PriorityQueue) nominatedPodsToInfo(nominatedPods []PodRef) []*framework
 	p.lock.RLock()
 	defer p.lock.RUnlock()
 	pods := make([]*framework.PodInfo, len(nominatedPods))
-	p.activeQ.underRLock(func(unlockedActiveQ unlockedActiveQueuer) {
+	p.activeQ.underRLock(func(unlockedActiveQ unlockedActiveQueueReader) {
 		for i, np := range nominatedPods {
 			pods[i] = p.nominatedPodToInfo(np, unlockedActiveQ).DeepCopy()
 		}

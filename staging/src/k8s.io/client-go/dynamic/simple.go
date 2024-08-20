@@ -293,7 +293,20 @@ func (c *dynamicResourceClient) Get(ctx context.Context, name string, opts metav
 	if err != nil {
 		return nil, err
 	}
-	return uncastObj.(*unstructured.Unstructured), nil
+
+	obj, ok := uncastObj.(*unstructured.Unstructured)
+	if ok {
+		return obj, nil
+	}
+
+	// If "items" exists in the response, it will become a list
+	list, ok := uncastObj.(*unstructured.UnstructuredList)
+	if !ok {
+		return nil, fmt.Errorf("response is not unstructured")
+	}
+	return &unstructured.Unstructured{
+		Object: list.UnstructuredContent(),
+	}, nil
 }
 
 func (c *dynamicResourceClient) List(ctx context.Context, opts metav1.ListOptions) (*unstructured.UnstructuredList, error) {

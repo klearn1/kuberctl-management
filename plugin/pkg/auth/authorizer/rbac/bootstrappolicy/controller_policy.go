@@ -391,6 +391,9 @@ func buildControllerRoles() ([]rbacv1.ClusterRole, []rbacv1.ClusterRoleBinding) 
 		if utilfeature.DefaultFeatureGate.Enabled(features.StatefulSetAutoDeletePVC) {
 			role.Rules = append(role.Rules, rbacv1helpers.NewRule("update", "delete").Groups(legacyGroup).Resources("persistentvolumeclaims").RuleOrDie())
 		}
+		if utilfeature.DefaultFeatureGate.Enabled(features.UpdateVolumeClaimTemplate) {
+			role.Rules = append(role.Rules, rbacv1helpers.NewRule("patch", "update").Groups(legacyGroup).Resources("persistentvolumeclaims").RuleOrDie())
+		}
 
 		return role
 	}())

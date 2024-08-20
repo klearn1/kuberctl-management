@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"strconv"
 	"strings"
 
 	"k8s.io/klog/v2"
@@ -124,6 +125,20 @@ func pickFieldsToHash(container *v1.Container) map[string]string {
 		"image": container.Image,
 	}
 	return retval
+}
+
+// HashAuth returns a hash code of a CRI pull image auth,
+// and an error if the hash cannot be calculated.
+// This hash code would be used as a metadata of the image pull info
+// to determine if an image is ensured and has to be pulled or not
+func HashAuth(auth *runtimeapi.AuthConfig) (string, error) {
+	hash := fnv.New64a()
+	authJSON, err := json.Marshal(auth)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal auth config: %w", err)
+	}
+	hashutil.DeepHashObject(hash, authJSON)
+	return strconv.FormatUint(hash.Sum64(), 16), nil
 }
 
 // envVarsToMap constructs a map of environment name to value from a slice

@@ -859,6 +859,17 @@ type KubeletConfiguration struct {
 	// Default: false
 	// +optional
 	FailCgroupV1 *bool `json:"failCgroupV1,omitempty"`
+
+	// PullImageSecretRecheck is a boolean that toggles this behavior.
+	// If false, the kubelet will fallback to the old behavior: only pull an image if it's not present.
+	// +optional
+	PullImageSecretRecheck *bool `json:"pullImageSecretRecheck,omitempty"`
+
+	// PullImageSecretRecheckPeriod is the period after which the kubelet's cache will be invalidated,
+	// thus causing rechecks for all IfNotPresent images that are recreated.
+	// If set to 0s, or 0, but pullImageSecretRecheck is true, then the kubelet will never invalidate its cache, but will maintain one.
+	// +optional
+	PullImageSecretRecheckPeriod metav1.Duration `json:"pullImageSecretRecheckPeriod,omitempty"`
 }
 
 type KubeletAuthorizationMode string

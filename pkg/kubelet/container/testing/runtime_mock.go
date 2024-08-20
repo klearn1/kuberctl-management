@@ -991,7 +991,7 @@ func (_c *MockRuntime_ListPodSandboxMetrics_Call) RunAndReturn(run func(context.
 }
 
 // PullImage provides a mock function with given fields: ctx, image, pullSecrets, podSandboxConfig
-func (_m *MockRuntime) PullImage(ctx context.Context, image container.ImageSpec, pullSecrets []corev1.Secret, podSandboxConfig *v1.PodSandboxConfig) (string, error) {
+func (_m *MockRuntime) PullImage(ctx context.Context, image container.ImageSpec, pullSecrets []corev1.Secret, podSandboxConfig *v1.PodSandboxConfig) (string, string, error) {
 	ret := _m.Called(ctx, image, pullSecrets, podSandboxConfig)
 
 	if len(ret) == 0 {
@@ -999,8 +999,9 @@ func (_m *MockRuntime) PullImage(ctx context.Context, image container.ImageSpec,
 	}
 
 	var r0 string
-	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, container.ImageSpec, []corev1.Secret, *v1.PodSandboxConfig) (string, error)); ok {
+	var r1 string
+	var r2 error
+	if rf, ok := ret.Get(0).(func(context.Context, container.ImageSpec, []corev1.Secret, *v1.PodSandboxConfig) (string, string, error)); ok {
 		return rf(ctx, image, pullSecrets, podSandboxConfig)
 	}
 	if rf, ok := ret.Get(0).(func(context.Context, container.ImageSpec, []corev1.Secret, *v1.PodSandboxConfig) string); ok {
@@ -1009,13 +1010,19 @@ func (_m *MockRuntime) PullImage(ctx context.Context, image container.ImageSpec,
 		r0 = ret.Get(0).(string)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, container.ImageSpec, []corev1.Secret, *v1.PodSandboxConfig) error); ok {
+	if rf, ok := ret.Get(1).(func(context.Context, container.ImageSpec, []corev1.Secret, *v1.PodSandboxConfig) string); ok {
 		r1 = rf(ctx, image, pullSecrets, podSandboxConfig)
 	} else {
-		r1 = ret.Error(1)
+		r1 = ret.Get(1).(string)
 	}
 
-	return r0, r1
+	if rf, ok := ret.Get(2).(func(context.Context, container.ImageSpec, []corev1.Secret, *v1.PodSandboxConfig) error); ok {
+		r2 = rf(ctx, image, pullSecrets, podSandboxConfig)
+	} else {
+		r2 = ret.Error(2)
+	}
+
+	return r0, r1, r2
 }
 
 // MockRuntime_PullImage_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PullImage'
@@ -1039,12 +1046,12 @@ func (_c *MockRuntime_PullImage_Call) Run(run func(ctx context.Context, image co
 	return _c
 }
 
-func (_c *MockRuntime_PullImage_Call) Return(_a0 string, _a1 error) *MockRuntime_PullImage_Call {
-	_c.Call.Return(_a0, _a1)
+func (_c *MockRuntime_PullImage_Call) Return(imageRef string, pullCredentialsHash string, err error) *MockRuntime_PullImage_Call {
+	_c.Call.Return(imageRef, pullCredentialsHash, err)
 	return _c
 }
 
-func (_c *MockRuntime_PullImage_Call) RunAndReturn(run func(context.Context, container.ImageSpec, []corev1.Secret, *v1.PodSandboxConfig) (string, error)) *MockRuntime_PullImage_Call {
+func (_c *MockRuntime_PullImage_Call) RunAndReturn(run func(context.Context, container.ImageSpec, []corev1.Secret, *v1.PodSandboxConfig) (string, string, error)) *MockRuntime_PullImage_Call {
 	_c.Call.Return(run)
 	return _c
 }

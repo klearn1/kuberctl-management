@@ -2170,9 +2170,9 @@ mergingList:
 mergingList:
   - name: 2
     other: b
+  - name: 3
   - name: 4
     other: c
-  - name: 3
 `),
 		},
 	},
@@ -2217,10 +2217,10 @@ mergingList:
 `),
 			Result: []byte(`
 mergingList:
-  - name: 4
-    other: c
   - name: 2
   - name: 3
+  - name: 4
+    other: c
 `),
 		},
 	},
@@ -4318,6 +4318,68 @@ mergingList:
 		},
 	},
 	{
+		Description: "removing element from a merging list with duplicate",
+		StrategicMergePatchRawTestCaseData: StrategicMergePatchRawTestCaseData{
+			Original: []byte(`
+mergingList:
+- name: 1
+- name: 2
+  value: dup1
+- name: 3
+- name: 2
+  value: dup2
+`),
+			Current: []byte(`
+mergingList:
+- name: 1
+- name: 2
+  value: dup1
+- name: 3
+- name: 2
+  value: dup2
+`),
+			Modified: []byte(`
+mergingList:
+- name: 1
+- name: 2
+  value: dup2
+- name: 3
+`),
+			TwoWay: []byte(`
+$setElementOrder/mergingList:
+- name: 1
+- name: 2
+- name: 3
+mergingList:
+- name: 2
+  value: dup2
+`),
+			TwoWayResult: []byte(`
+mergingList:
+- name: 1
+- name: 2
+  value: dup2
+- name: 3
+`),
+			ThreeWay: []byte(`
+$setElementOrder/mergingList:
+- name: 1
+- name: 2
+- name: 3
+mergingList:
+- name: 2
+  value: dup2
+`),
+			Result: []byte(`
+mergingList:
+- name: 1
+- name: 2
+  value: dup2
+- name: 3
+`),
+		},
+	},
+	{
 		// This test case is used just to demonstrate the behavior when dealing with a list with duplicate
 		Description: "behavior of set element order for a merging int list with duplicate",
 		StrategicMergePatchRawTestCaseData: StrategicMergePatchRawTestCaseData{
@@ -6201,7 +6263,6 @@ func TestStrategicMergePatch(t *testing.T) {
 
 	for _, schema := range schemas {
 		t.Run(schema.Name(), func(t *testing.T) {
-
 			testStrategicMergePatchWithCustomArguments(t, "bad original",
 				"<THIS IS NOT JSON>", "{}", schema, mergepatch.ErrBadJSONDoc)
 			testStrategicMergePatchWithCustomArguments(t, "bad patch",

@@ -47,6 +47,37 @@ var (
 	SnapshotContentGVR = schema.GroupVersionResource{Group: SnapshotGroup, Version: "v1", Resource: "volumesnapshotcontents"}
 )
 
+// WaitForGroupSnapshotReady waits for a VolumeGroupSnapshot to be ready to use or until timeout occurs, whichever comes first.
+func WaitForGroupSnapshotReady(ctx context.Context, c dynamic.Interface, ns string, groupSnapshotName string, poll, timeout time.Duration) error {
+	framework.Logf("Waiting up to %v for VolumeGroupSnapshot %s to become ready", timeout, groupSnapshotName)
+
+	if successful := WaitUntil(poll, timeout, func() bool {
+		snapshot, err := c.Resource(VolumeGroupSnapshotGVR).Namespace(ns).Get(ctx, groupSnapshotName, metav1.GetOptions{})
+		if err != nil {
+			framework.Logf("Failed to get group snapshot %q, retrying in %v. Error: %v", groupSnapshotName, poll, err)
+			return false
+		}
+
+		status := snapshot.Object["status"]
+		if status == nil {
+			framework.Logf("VolumeGroupSnapshot %s found but is not ready.", groupSnapshotName)
+			return false
+		}
+		value := status.(map[string]interface{})
+		if value["readyToUse"] == true {
+			framework.Logf("VolumeSnapshot %s found and is ready", groupSnapshotName)
+			return true
+		}
+
+		framework.Logf("VolumeSnapshot %s found but is not ready.", groupSnapshotName)
+		return false
+	}); successful {
+		return nil
+	}
+
+	return fmt.Errorf("VolumeSnapshot %s is not ready within %v", groupSnapshotName, timeout)
+}
+
 // WaitForSnapshotReady waits for a VolumeSnapshot to be ready to use or until timeout occurs, whichever comes first.
 func WaitForSnapshotReady(ctx context.Context, c dynamic.Interface, ns string, snapshotName string, poll, timeout time.Duration) error {
 	framework.Logf("Waiting up to %v for VolumeSnapshot %s to become ready", timeout, snapshotName)

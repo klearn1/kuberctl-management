@@ -373,12 +373,6 @@ func TestRecordContainerEventUnknownStatus(t *testing.T) {
 	}
 
 	container := pod.Spec.Containers[0]
-	recorder := record.NewFakeRecorder(10)
-
-	pb := &prober{
-		recorder: recorder,
-	}
-
 	output := "probe output"
 
 	testCases := []struct {
@@ -412,27 +406,37 @@ func TestRecordContainerEventUnknownStatus(t *testing.T) {
 		},
 	}
 
-	for _, tc := range testCases {
+	for i, tc := range testCases {
+		t.Run(fmt.Sprintf("%d-%s", i, tc.probeType), func(t *testing.T) {
+			bufferSize := len(tc.expected) + 1
+			fakeRecorder := record.NewFakeRecorder(bufferSize)
 
-		// Create a buffered channel with capacity of 2 - trying to ensure that even if events are not immediately consumed, the event recorder won't block.
-		recorder.Events = make(chan string, 2)
+			pb := &prober{
+				recorder: fakeRecorder,
+			}
 
-		pb.recordContainerEvent(pod, &container, v1.EventTypeWarning, "ContainerProbeWarning", "%s probe warning: %s", tc.probeType, output)
-		pb.recordContainerEvent(pod, &container, v1.EventTypeWarning, "ContainerProbeWarning", "Unknown %s probe status: %s", tc.probeType, tc.result)
+			pb.recordContainerEvent(pod, &container, v1.EventTypeWarning, "ContainerProbeWarning", "%s probe warning: %s", tc.probeType, output)
+			pb.recordContainerEvent(pod, &container, v1.EventTypeWarning, "ContainerProbeWarning", "Unknown %s probe status: %s", tc.probeType, tc.result)
 
-		// Create a slice to hold event messages
-		var events []string
+			var events []string
+			for i := 0; i < len(tc.expected); i++ {
+				select {
+				case event := <-fakeRecorder.Events:
+					events = append(events, event)
+				default:
+					assert.Failf(t, "missing events", "expected %d events, but got fewer", len(tc.expected))
+					return
+				}
+			}
 
-		// Receive events from the channel
-		for i := 0; i < 2; i++ {
-			events = append(events, <-recorder.Events)
-		}
+			select {
+			case extraEvent := <-fakeRecorder.Events:
+				assert.Failf(t, "unexpected event", "unexpected extra event: %s", extraEvent)
+			default:
+				// No extra event, proceed with validation
+			}
 
-		assert.Equal(t, len(tc.expected), len(events), "unexpected number of events")
-
-		for i, event := range events {
-			assert.Equal(t, tc.expected[i], event, "unexpected event message at index %d", i)
-		}
+			assert.Equal(t, tc.expected, events, "unexpected events")
+		})
 	}
-
 }

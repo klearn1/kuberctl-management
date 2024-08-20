@@ -38,14 +38,14 @@ import (
 	auditinternal "k8s.io/apiserver/pkg/apis/audit"
 	auditv1 "k8s.io/apiserver/pkg/apis/audit/v1"
 	"k8s.io/apiserver/pkg/audit"
-	"k8s.io/client-go/tools/clientcmd/api/v1"
+	v1 "k8s.io/client-go/tools/clientcmd/api/v1"
 )
 
 // newWebhookHandler returns a handler which receives webhook events and decodes the
 // request body. The caller passes a callback which is called on each webhook POST.
 // The object passed to cb is of the same type as list.
 func newWebhookHandler(t *testing.T, list runtime.Object, cb func(events runtime.Object)) http.Handler {
-	s := json.NewSerializer(json.DefaultMetaFactory, audit.Scheme, audit.Scheme, false)
+	s := json.NewSerializerWithOptions(json.DefaultMetaFactory, audit.Scheme, audit.Scheme, json.SerializerOptions{})
 	return &testWebhookHandler{
 		t:          t,
 		list:       list,

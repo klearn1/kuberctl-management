@@ -989,6 +989,7 @@ func TestCacherDontMissEventsOnReinitialization(t *testing.T) {
 }
 
 func TestCacherNoLeakWithMultipleWatchers(t *testing.T) {
+	t.Parallel()
 	backingStorage := &dummyStorage{}
 	cacher, _, err := newTestCacher(backingStorage)
 	if err != nil {
@@ -1148,21 +1149,27 @@ func testCacherSendBookmarkEvents(t *testing.T, allowWatchBookmarks, expectedBoo
 
 func TestCacherSendBookmarkEvents(t *testing.T) {
 	testCases := []struct {
+		name                string
 		allowWatchBookmarks bool
 		expectedBookmarks   bool
 	}{
 		{
+			name:                "allowWatchBookmarks:true, expectedBookmarks: true",
 			allowWatchBookmarks: true,
 			expectedBookmarks:   true,
 		},
 		{
+			name:                "allowWatchBookmarks:false, expectedBookmarks: false",
 			allowWatchBookmarks: false,
 			expectedBookmarks:   false,
 		},
 	}
 
 	for _, tc := range testCases {
-		testCacherSendBookmarkEvents(t, tc.allowWatchBookmarks, tc.expectedBookmarks)
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			testCacherSendBookmarkEvents(t, tc.allowWatchBookmarks, tc.expectedBookmarks)
+		})
 	}
 }
 

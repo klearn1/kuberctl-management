@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"golang.org/x/exp/slices"
 	"reflect"
 	"sync"
 	"testing"
@@ -400,6 +401,7 @@ type FakeRecorder struct {
 	source v1.EventSource
 	Events []*v1.Event
 	clock  clock.Clock
+	T      *testing.T
 }
 
 // Event emits a fake event to the fake recorder
@@ -415,6 +417,19 @@ func (f *FakeRecorder) Eventf(obj runtime.Object, eventtype, reason, messageFmt 
 // AnnotatedEventf emits a fake formatted event to the fake recorder
 func (f *FakeRecorder) AnnotatedEventf(obj runtime.Object, annotations map[string]string, eventtype, reason, messageFmt string, args ...interface{}) {
 	f.Eventf(obj, eventtype, reason, messageFmt, args...)
+}
+
+func (f *FakeRecorder) AssertEventReasons(events []v1.Event) bool {
+	f.Lock()
+	defer f.Unlock()
+	equalEventReason := func(a *v1.Event, b v1.Event) bool {
+		if a.Reason != b.Reason {
+			f.T.Errorf("AssertList: expected %#v, got %#v", a.Reason, b.Reason)
+			return false
+		}
+		return true
+	}
+	return slices.EqualFunc(f.Events, events, equalEventReason)
 }
 
 func (f *FakeRecorder) generateEvent(obj runtime.Object, timestamp metav1.Time, eventtype, reason, message string) {
@@ -466,11 +481,12 @@ func (f *FakeRecorder) makeEvent(ref *v1.ObjectReference, eventtype, reason, mes
 }
 
 // NewFakeRecorder returns a pointer to a newly constructed FakeRecorder.
-func NewFakeRecorder() *FakeRecorder {
+func NewFakeRecorder(t *testing.T) *FakeRecorder {
 	return &FakeRecorder{
 		source: v1.EventSource{Component: "nodeControllerTest"},
 		Events: []*v1.Event{},
 		clock:  testingclock.NewFakeClock(time.Now()),
+		T:      t,
 	}
 }
 

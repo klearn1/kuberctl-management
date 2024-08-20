@@ -525,7 +525,7 @@ func TestAllocateOrOccupyCIDRSuccess(t *testing.T) {
 			return
 		}
 		rangeAllocator.nodesSynced = test.AlwaysReady
-		rangeAllocator.recorder = testutil.NewFakeRecorder()
+		rangeAllocator.recorder = testutil.NewFakeRecorder(t)
 		go allocator.Run(tCtx)
 
 		// this is a bit of white box testing
@@ -623,7 +623,7 @@ func TestAllocateOrOccupyCIDRFailure(t *testing.T) {
 			return
 		}
 		rangeAllocator.nodesSynced = test.AlwaysReady
-		rangeAllocator.recorder = testutil.NewFakeRecorder()
+		rangeAllocator.recorder = testutil.NewFakeRecorder(t)
 		go allocator.Run(tCtx)
 
 		// this is a bit of white box testing
@@ -765,7 +765,7 @@ func TestReleaseCIDRSuccess(t *testing.T) {
 			return
 		}
 		rangeAllocator.nodesSynced = test.AlwaysReady
-		rangeAllocator.recorder = testutil.NewFakeRecorder()
+		rangeAllocator.recorder = testutil.NewFakeRecorder(t)
 		go allocator.Run(tCtx)
 
 		// this is a bit of white box testing

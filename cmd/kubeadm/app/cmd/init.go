@@ -502,12 +502,16 @@ func (d *initData) OutputWriter() io.Writer {
 
 // getDryRunClient creates a fake client that answers some GET calls in order to be able to do the full init flow in dry-run mode.
 func getDryRunClient(d *initData) (clientset.Interface, error) {
-	svcSubnetCIDR, err := kubeadmconstants.GetKubernetesServiceCIDR(d.cfg.Networking.ServiceSubnet)
-	if err != nil {
-		return nil, errors.Wrapf(err, "unable to get internal Kubernetes Service IP from the given service CIDR (%s)", d.cfg.Networking.ServiceSubnet)
+	dryRun := apiclient.NewDryRun()
+	if err := dryRun.WithKubeConfigFile(d.KubeConfigPath()); err != nil {
+		return nil, err
 	}
-	dryRunGetter := apiclient.NewInitDryRunGetter(d.cfg.NodeRegistration.Name, svcSubnetCIDR.String())
-	return apiclient.NewDryRunClient(dryRunGetter, os.Stdout), nil
+	dryRun.WithDefaultMarshalFunction().
+		WithWriter(os.Stdout).
+		PrependReactor(dryRun.GetNodeReactor()).
+		PrependReactor(dryRun.PatchNodeReactor())
+
+	return dryRun.FakeClient(), nil
 }
 
 // Client returns a Kubernetes client to be used by kubeadm.

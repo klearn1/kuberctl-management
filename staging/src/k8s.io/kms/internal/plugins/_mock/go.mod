@@ -21,3 +21,5 @@ require (
 )
 
 replace k8s.io/kms => ../../../../kms
+
+replace go.etcd.io/etcd/client/v3 => github.com/serathius/etcd/client/v3 v3.0.0-20240724100631-9446f6d2f6d1

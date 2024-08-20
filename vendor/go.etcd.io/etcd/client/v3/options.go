@@ -15,6 +15,7 @@
 package clientv3
 
 import (
+	"fmt"
 	"math"
 	"time"
 
@@ -67,3 +68,24 @@ var defaultCallOpts = []grpc.CallOption{
 
 // MaxLeaseTTL is the maximum lease TTL value
 const MaxLeaseTTL = 9000000000
+
+func Options(cfg *Config) ([]grpc.CallOption, error) {
+	callOpts := defaultCallOpts
+	if cfg.MaxCallSendMsgSize > 0 || cfg.MaxCallRecvMsgSize > 0 {
+		if cfg.MaxCallRecvMsgSize > 0 && cfg.MaxCallSendMsgSize > cfg.MaxCallRecvMsgSize {
+			return nil, fmt.Errorf("gRPC message recv limit (%d bytes) must be greater than send limit (%d bytes)", cfg.MaxCallRecvMsgSize, cfg.MaxCallSendMsgSize)
+		}
+		callOpts = []grpc.CallOption{
+			defaultWaitForReady,
+			defaultMaxCallSendMsgSize,
+			defaultMaxCallRecvMsgSize,
+		}
+		if cfg.MaxCallSendMsgSize > 0 {
+			callOpts[1] = grpc.MaxCallSendMsgSize(cfg.MaxCallSendMsgSize)
+		}
+		if cfg.MaxCallRecvMsgSize > 0 {
+			callOpts[2] = grpc.MaxCallRecvMsgSize(cfg.MaxCallRecvMsgSize)
+		}
+	}
+	return callOpts, nil
+}

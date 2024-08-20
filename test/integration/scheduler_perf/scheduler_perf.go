@@ -100,7 +100,7 @@ var (
 			"scheduler_framework_extension_point_duration_seconds": {
 				{
 					label:  extensionPointsLabelName,
-					values: metrics.ExtentionPoints,
+					values: metrics.ExtensionPoints,
 				},
 			},
 			"scheduler_scheduling_attempt_duration_seconds": {
@@ -117,7 +117,7 @@ var (
 				},
 				{
 					label:  extensionPointsLabelName,
-					values: metrics.ExtentionPoints,
+					values: metrics.ExtensionPoints,
 				},
 			},
 		},
@@ -246,7 +246,7 @@ func (w *workload) setDefaults(testCaseThresholdMetricSelector *thresholdMetricS
 		w.ThresholdMetricSelector = testCaseThresholdMetricSelector
 		return
 	}
-	// By defult, SchedulingThroughput should be compared with the threshold.
+	// By default, SchedulingThroughput should be compared with the threshold.
 	w.ThresholdMetricSelector = &thresholdMetricSelector{
 		Name: "SchedulingThroughput",
 	}
@@ -397,7 +397,7 @@ type realOp interface {
 	patchParams(w *workload) (realOp, error)
 }
 
-// runnableOp is an interface implemented by some operations. It makes it posssible
+// runnableOp is an interface implemented by some operations. It makes it possible
 // to execute the operation without having to add separate code into runWorkload.
 type runnableOp interface {
 	realOp

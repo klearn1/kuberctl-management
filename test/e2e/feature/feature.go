@@ -392,6 +392,7 @@ var (
 	// TODO: document the feature (owning SIG, when to use this feature for a test)
 	VolumeSnapshotDataSource = framework.WithFeature(framework.ValidFeatures.Add("VolumeSnapshotDataSource"))
 
+	GroupSnapshotDataSource = framework.WithFeature(framework.ValidFeatures.Add("GroupSnapshotDataSource"))
 	// TODO: document the feature (owning SIG, when to use this feature for a test)
 	VolumeSourceXFS = framework.WithFeature(framework.ValidFeatures.Add("VolumeSourceXFS"))
 

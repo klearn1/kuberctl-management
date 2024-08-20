@@ -60,6 +60,8 @@ var (
 	DynamicCreatedSnapshot TestSnapshotType = "DynamicSnapshot"
 	// PreprovisionedCreatedSnapshot represents a snapshot type for pre-provisioned snapshot
 	PreprovisionedCreatedSnapshot TestSnapshotType = "PreprovisionedSnapshot"
+
+	GroupVolumeSnapshot TestSnapshotType = "GroupVolumeSnapshot"
 )
 
 // TestSnapshotDeletionPolicy represents the deletion policy of the snapshot class
@@ -315,6 +317,14 @@ var (
 	DynamicSnapshotDelete = TestPattern{
 		Name:                   "Dynamic Snapshot (delete policy)",
 		SnapshotType:           DynamicCreatedSnapshot,
+		SnapshotDeletionPolicy: DeleteSnapshot,
+		VolType:                DynamicPV,
+	}
+
+	// GroupVolumeSnapshotDelete is TestPattern for "Groupsnapshot"
+	GroupVolumeSnapshotDelete = TestPattern{
+		Name:                   " (delete policy)",
+		SnapshotType:           GroupVolumeSnapshot,
 		SnapshotDeletionPolicy: DeleteSnapshot,
 		VolType:                DynamicPV,
 	}

@@ -360,6 +360,14 @@ func (im *realImageGCManager) GarbageCollect(ctx context.Context, beganGC time.T
 	if fsStats.CapacityBytes != nil {
 		capacity = int64(*fsStats.CapacityBytes)
 	}
+
+	// Check valid capacity.
+	if capacity == 0 {
+		err := goerrors.New("invalid capacity 0 on image filesystem")
+		im.recorder.Eventf(im.nodeRef, v1.EventTypeWarning, events.InvalidDiskCapacity, err.Error())
+		return err
+	}
+
 	if fsStats.AvailableBytes != nil {
 		available = int64(*fsStats.AvailableBytes)
 	}
@@ -367,13 +375,6 @@ func (im *realImageGCManager) GarbageCollect(ctx context.Context, beganGC time.T
 	if available > capacity {
 		klog.InfoS("Availability is larger than capacity", "available", available, "capacity", capacity)
 		available = capacity
-	}
-
-	// Check valid capacity.
-	if capacity == 0 {
-		err := goerrors.New("invalid capacity 0 on image filesystem")
-		im.recorder.Eventf(im.nodeRef, v1.EventTypeWarning, events.InvalidDiskCapacity, err.Error())
-		return err
 	}
 
 	// If over the max threshold, free enough to place us at the lower threshold.

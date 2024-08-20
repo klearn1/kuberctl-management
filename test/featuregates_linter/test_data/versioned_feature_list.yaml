@@ -1,1 +1,6 @@
-[]
+- name: DeploymentPodReplacementPolicy
+  versionedSpecs:
+  - default: false
+    lockToDefault: false
+    preRelease: Alpha
+    version: "1.31"

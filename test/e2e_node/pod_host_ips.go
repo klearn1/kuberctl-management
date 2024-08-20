@@ -29,21 +29,18 @@ import (
 	"k8s.io/apimachinery/pkg/util/uuid"
 	netutils "k8s.io/utils/net"
 
-	utilfeature "k8s.io/apiserver/pkg/util/feature"
-	kubefeatures "k8s.io/kubernetes/pkg/features"
 	utilnode "k8s.io/kubernetes/pkg/util/node"
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2enetwork "k8s.io/kubernetes/test/e2e/framework/network"
 	e2enode "k8s.io/kubernetes/test/e2e/framework/node"
 	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
 	e2epodoutput "k8s.io/kubernetes/test/e2e/framework/pod/output"
-	e2eskipper "k8s.io/kubernetes/test/e2e/framework/skipper"
 	"k8s.io/kubernetes/test/e2e/network/common"
 	imageutils "k8s.io/kubernetes/test/utils/image"
 	admissionapi "k8s.io/pod-security-admission/api"
 )
 
-var _ = common.SIGDescribe("Pod Host IPs", framework.WithSerial(), func() {
+var _ = common.SIGDescribe("Pod Host IPs", func() {
 	f := framework.NewDefaultFramework("host-ips")
 	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
 
@@ -111,10 +108,6 @@ var _ = common.SIGDescribe("Pod Host IPs", framework.WithSerial(), func() {
 		})
 
 		ginkgo.It("should provide hostIPs as an env var", func(ctx context.Context) {
-			if !utilfeature.DefaultFeatureGate.Enabled(kubefeatures.PodHostIPs) {
-				e2eskipper.Skipf("PodHostIPs feature is not enabled")
-			}
-
 			podName := "downward-api-" + string(uuid.NewUUID())
 			env := []v1.EnvVar{
 				{

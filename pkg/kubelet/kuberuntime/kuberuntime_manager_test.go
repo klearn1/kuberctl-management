@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	goruntime "runtime"
 	"sort"
 	"testing"
 	"time"
@@ -47,6 +48,8 @@ import (
 	podutil "k8s.io/kubernetes/pkg/api/v1/pod"
 	"k8s.io/kubernetes/pkg/credentialprovider"
 	"k8s.io/kubernetes/pkg/features"
+	"k8s.io/kubernetes/pkg/kubelet/cm"
+	cmtest "k8s.io/kubernetes/pkg/kubelet/cm/testing"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	containertest "k8s.io/kubernetes/pkg/kubelet/container/testing"
 	imagetypes "k8s.io/kubernetes/pkg/kubelet/images"
@@ -2706,5 +2709,433 @@ func TestGetImageVolumes(t *testing.T) {
 			require.NoError(t, err, desc)
 		}
 		assert.Equal(t, tc.expectedImageVolumePulls, imageVolumePulls)
+	}
+}
+
+func TestDoPodResizeAction(t *testing.T) {
+	if goruntime.GOOS != "linux" {
+		t.Skip("unsupported OS")
+	}
+
+	cpu100m := resource.MustParse("100m")
+	cpu200m := resource.MustParse("200m")
+	cpu300m := resource.MustParse("300m")
+	mem100M := resource.MustParse("100Mi")
+	mem200M := resource.MustParse("200Mi")
+	mem300M := resource.MustParse("300Mi")
+	type mockAction int
+	const (
+		notCalled mockAction = iota
+		calledAndSuccess
+		calledAndError
+	)
+	setConfigErrorMsg := "setPodCgroupConfig Artificial Error"
+	getConfigErrorMsg := "getPodCgroupConfig Artificial Error"
+	getMemoryUsageErrorMsg := "getPodCgroupMemoryUsage Artificial Error"
+	runtimeErrorMsg := "updateContainerResources Artificial Error"
+
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.InPlacePodVerticalScaling, true)
+	fakeRuntime, _, m, err := createTestRuntimeManager()
+	require.NoError(t, err)
+	m.cpuCFSQuota = true // Enforce CPU Limits
+
+	for _, tc := range []struct {
+		testName              string
+		currentResources      v1.ResourceRequirements
+		qosClass              v1.PodQOSClass
+		desiredResources      v1.ResourceRequirements
+		updatePodResources    bool
+		mockSetConfigCPULimit mockAction
+		mockSetConfigCPUReq   mockAction
+		mockSetConfigMemLimit mockAction
+		// pcm.SetPodCgroupConfig() is not called for Memory Request
+		runTimeError        bool
+		getConfigError      bool
+		fakeNodeMemoryUsage int // negative value emulates error
+		expectedError       string
+	}{
+		{
+			testName: "Increase cpu and memory without error",
+			currentResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+			},
+			desiredResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu300m, v1.ResourceMemory: mem300M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu300m, v1.ResourceMemory: mem300M},
+			},
+			qosClass:              v1.PodQOSGuaranteed,
+			mockSetConfigMemLimit: calledAndSuccess,
+			mockSetConfigCPULimit: calledAndSuccess,
+			mockSetConfigCPUReq:   calledAndSuccess,
+		},
+		{
+			testName: "Decrease cpu and memory without error",
+			currentResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+			},
+			desiredResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu100m, v1.ResourceMemory: mem100M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu100m, v1.ResourceMemory: mem100M},
+			},
+			qosClass:              v1.PodQOSGuaranteed,
+			mockSetConfigMemLimit: calledAndSuccess,
+			mockSetConfigCPULimit: calledAndSuccess,
+			mockSetConfigCPUReq:   calledAndSuccess,
+		},
+		{
+			testName: "Increase cpu and memory without error using updatePodResources",
+			currentResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+			},
+			desiredResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu300m, v1.ResourceMemory: mem300M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu300m, v1.ResourceMemory: mem300M},
+			},
+			qosClass:              v1.PodQOSGuaranteed,
+			updatePodResources:    true,
+			mockSetConfigMemLimit: calledAndSuccess,
+			mockSetConfigCPULimit: calledAndSuccess,
+			mockSetConfigCPUReq:   calledAndSuccess,
+		},
+		{
+			testName: "pcm.SetPodCgroupConfig() error at increasing memory limit",
+			currentResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+			},
+			desiredResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu300m, v1.ResourceMemory: mem300M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu300m, v1.ResourceMemory: mem300M},
+			},
+			qosClass:              v1.PodQOSGuaranteed,
+			mockSetConfigMemLimit: calledAndError,
+			expectedError:         setConfigErrorMsg,
+		},
+		{
+			testName: "pcm.SetPodCgroupConfig() error at increasing cpu limit",
+			currentResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+			},
+			desiredResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu300m, v1.ResourceMemory: mem300M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu300m, v1.ResourceMemory: mem300M},
+			},
+			qosClass:              v1.PodQOSGuaranteed,
+			mockSetConfigMemLimit: calledAndSuccess,
+			mockSetConfigCPULimit: calledAndError,
+			expectedError:         setConfigErrorMsg,
+		},
+		{
+			testName: "pcm.SetPodCgroupConfig() error at decreasing cpu limit",
+			currentResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+			},
+			desiredResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu100m, v1.ResourceMemory: mem200M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu100m, v1.ResourceMemory: mem200M},
+			},
+			qosClass:              v1.PodQOSGuaranteed,
+			mockSetConfigCPULimit: calledAndError,
+			expectedError:         setConfigErrorMsg,
+		},
+		{
+			testName: "pcm.SetPodCgroupConfig() error at decreasing memory limit",
+			currentResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+			},
+			desiredResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem100M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem100M},
+			},
+			qosClass:              v1.PodQOSGuaranteed,
+			mockSetConfigMemLimit: calledAndError,
+			expectedError:         setConfigErrorMsg,
+		},
+		{
+			testName: "pcm.SetPodCgroupConfig() error at increasing cpu request",
+			currentResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+			},
+			desiredResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu300m, v1.ResourceMemory: mem200M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu300m, v1.ResourceMemory: mem200M},
+			},
+			qosClass:              v1.PodQOSGuaranteed,
+			mockSetConfigCPULimit: calledAndSuccess,
+			mockSetConfigCPUReq:   calledAndError,
+			expectedError:         setConfigErrorMsg,
+		},
+		{
+			testName: "pcm.SetPodCgroupConfig() error at decreasing cpu request",
+			currentResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+			},
+			desiredResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu100m, v1.ResourceMemory: mem200M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu100m, v1.ResourceMemory: mem200M},
+			},
+			qosClass:              v1.PodQOSGuaranteed,
+			mockSetConfigCPULimit: calledAndSuccess,
+			mockSetConfigCPUReq:   calledAndError,
+			expectedError:         setConfigErrorMsg,
+		},
+		{
+			testName: "runtimeService.UpdateContainerResources() error at increasing memory",
+			currentResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+			},
+			desiredResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu300m, v1.ResourceMemory: mem300M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu300m, v1.ResourceMemory: mem300M},
+			},
+			qosClass:              v1.PodQOSGuaranteed,
+			mockSetConfigMemLimit: calledAndSuccess,
+			runTimeError:          true,
+			expectedError:         runtimeErrorMsg,
+		},
+		{
+			testName: "runtimeService.UpdateContainerResources() error at increasing cpu",
+			currentResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+			},
+			desiredResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu300m, v1.ResourceMemory: mem200M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu300m, v1.ResourceMemory: mem200M},
+			},
+			qosClass:              v1.PodQOSGuaranteed,
+			mockSetConfigCPULimit: calledAndSuccess,
+			mockSetConfigCPUReq:   calledAndSuccess,
+			runTimeError:          true,
+			expectedError:         runtimeErrorMsg,
+		},
+		{
+			testName: "pcm.GetPodCgroupMemoryUsage error at increasing memory",
+			currentResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+			},
+			desiredResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem300M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem300M},
+			},
+			qosClass:            v1.PodQOSGuaranteed,
+			fakeNodeMemoryUsage: -1,
+			expectedError:       getMemoryUsageErrorMsg,
+		},
+		{
+			testName: "error by setting memory limit less than current usage",
+			currentResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+			},
+			desiredResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem100M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem100M},
+			},
+			qosClass:            v1.PodQOSGuaranteed,
+			fakeNodeMemoryUsage: 150 * 1024 * 1024,
+			expectedError:       "aborting attempt to set pod memory limit less than current memory usage",
+		},
+		{
+			testName: "pcm.GetPodCgroupConfig() error at increasing memory",
+			currentResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+			},
+			desiredResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem300M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem300M},
+			},
+			qosClass:       v1.PodQOSGuaranteed,
+			getConfigError: true,
+			expectedError:  getConfigErrorMsg,
+		},
+		{
+			testName: "pcm.GetPodCgroupConfig() error at increasing cpu",
+			currentResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+			},
+			desiredResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu300m, v1.ResourceMemory: mem200M},
+				Limits:   v1.ResourceList{v1.ResourceCPU: cpu300m, v1.ResourceMemory: mem200M},
+			},
+			qosClass:       v1.PodQOSGuaranteed,
+			getConfigError: true,
+			expectedError:  getConfigErrorMsg,
+		},
+		{
+			testName: "memory is nil error",
+			currentResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+			},
+			desiredResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem300M},
+			},
+			qosClass:      v1.PodQOSBurstable,
+			expectedError: "podResources.Memory is nil for pod",
+		},
+		{
+			testName: "cpu is nil error",
+			currentResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu200m, v1.ResourceMemory: mem200M},
+			},
+			desiredResources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{v1.ResourceCPU: cpu300m, v1.ResourceMemory: mem200M},
+			},
+			qosClass:      v1.PodQOSBurstable,
+			expectedError: "podResources.CPUQuota or podResources.CPUShares is nil for pod",
+		},
+	} {
+		t.Run(tc.testName, func(t *testing.T) {
+			pod, kps := makeBasePodAndStatus()
+			// pod spec and allocated resources are already updated as desired when doPodResizeAction() is called.
+			pod.Spec.Containers[0].Resources = tc.desiredResources
+			pod.Status.ContainerStatuses[0].AllocatedResources = tc.desiredResources.Requests
+			pod.Status.QOSClass = tc.qosClass
+			kcs := kps.FindContainerStatusByName(pod.Spec.Containers[0].Name)
+
+			cpuReqResized := !tc.currentResources.Requests.Cpu().IsZero() && !tc.currentResources.Requests.Cpu().Equal(*tc.desiredResources.Requests.Cpu())
+			cpuLimReiszed := !tc.currentResources.Limits.Cpu().IsZero() && !tc.currentResources.Limits.Cpu().Equal(*tc.desiredResources.Limits.Cpu())
+			memReqResized := !tc.currentResources.Requests.Memory().IsZero() && !tc.currentResources.Requests.Memory().Equal(*tc.desiredResources.Requests.Memory())
+			memLimResized := !tc.currentResources.Limits.Memory().IsZero() && !tc.currentResources.Limits.Memory().Equal(*tc.desiredResources.Limits.Memory())
+
+			cmMock := cmtest.NewMockContainerManager(t)
+			pcmMock := cmtest.NewMockPodContainerManager(t)
+			m.containerManager = cmMock
+			cmMock.EXPECT().NewPodContainerManager().Return(pcmMock)
+
+			if cpuReqResized || cpuLimReiszed || tc.updatePodResources {
+				cpuRequest := tc.currentResources.Requests.Cpu()
+				cpuLimit := tc.currentResources.Limits.Cpu()
+				var fakeCPUShares uint64
+				if cpuRequest.IsZero() && !cpuLimit.IsZero() {
+					fakeCPUShares = cm.MilliCPUToShares(cpuLimit.MilliValue())
+				} else {
+					fakeCPUShares = cm.MilliCPUToShares(cpuRequest.MilliValue())
+				}
+				var fakeCPUQota int64
+				if cpuLimit.IsZero() {
+					fakeCPUQota = -1
+				} else {
+					fakeCPUQota = cm.MilliCPUToQuota(cpuLimit.MilliValue(), cm.QuotaPeriod)
+				}
+				fakeCPUPeriod := uint64(cm.QuotaPeriod)
+				fakeCPUCgroupConfig := cm.ResourceConfig{
+					CPUShares: &fakeCPUShares,
+					CPUQuota:  &fakeCPUQota,
+					CPUPeriod: &fakeCPUPeriod,
+				}
+				if tc.getConfigError {
+					pcmMock.EXPECT().GetPodCgroupConfig(pod, v1.ResourceCPU).Return(nil, errors.New(getConfigErrorMsg))
+				} else {
+					// Maybe() is used because this may not be called if error is emulated at resizing memory
+					pcmMock.EXPECT().GetPodCgroupConfig(pod, v1.ResourceCPU).Return(&fakeCPUCgroupConfig, nil).Maybe()
+				}
+
+				if cpuReqResized {
+					fakeResizedCPUShares := cm.MilliCPUToShares(tc.desiredResources.Requests.Cpu().MilliValue())
+					resourceForCPURequest := cm.ResourceConfig{
+						CPUPeriod: &fakeCPUPeriod,
+						CPUShares: &fakeResizedCPUShares,
+					}
+					switch tc.mockSetConfigCPUReq {
+					case calledAndSuccess:
+						pcmMock.EXPECT().SetPodCgroupConfig(pod, v1.ResourceCPU, &resourceForCPURequest).Return(nil).Once()
+					case calledAndError:
+						pcmMock.EXPECT().SetPodCgroupConfig(pod, v1.ResourceCPU, &resourceForCPURequest).Return(errors.New(setConfigErrorMsg)).Once()
+					}
+				}
+				if cpuLimReiszed {
+					fakeResizedCPUQota := cm.MilliCPUToQuota(tc.desiredResources.Limits.Cpu().MilliValue(), cm.QuotaPeriod)
+					resourceForCPULimit := cm.ResourceConfig{
+						CPUPeriod: &fakeCPUPeriod,
+						CPUQuota:  &fakeResizedCPUQota,
+					}
+					switch tc.mockSetConfigCPULimit {
+					case calledAndSuccess:
+						pcmMock.EXPECT().SetPodCgroupConfig(pod, v1.ResourceCPU, &resourceForCPULimit).Return(nil).Once()
+					case calledAndError:
+						pcmMock.EXPECT().SetPodCgroupConfig(pod, v1.ResourceCPU, &resourceForCPULimit).Return(errors.New(setConfigErrorMsg)).Once()
+					}
+				}
+			}
+			if memReqResized || memLimResized || tc.updatePodResources {
+				fakeMemLimit := tc.currentResources.Limits.Memory().Value()
+				// Maybe() is used because these may not be called if error is emulated at resizing cpu
+				if tc.getConfigError {
+					pcmMock.EXPECT().GetPodCgroupConfig(pod, v1.ResourceMemory).Return(nil, errors.New(getConfigErrorMsg))
+				} else {
+					pcmMock.EXPECT().GetPodCgroupConfig(pod, v1.ResourceMemory).Return(&cm.ResourceConfig{Memory: &fakeMemLimit}, nil).Maybe()
+				}
+				if tc.fakeNodeMemoryUsage < 0 {
+					pcmMock.EXPECT().GetPodCgroupMemoryUsage(pod).Return(0, errors.New(getMemoryUsageErrorMsg))
+				} else {
+					pcmMock.EXPECT().GetPodCgroupMemoryUsage(pod).Return(uint64(tc.fakeNodeMemoryUsage), nil).Maybe()
+				}
+
+				if memLimResized {
+					resourceForMemoryLimit := cm.ResourceConfigForPod(pod, m.cpuCFSQuota, uint64((m.cpuCFSQuotaPeriod.Duration)/time.Microsecond), false)
+					switch tc.mockSetConfigMemLimit {
+					case calledAndSuccess:
+						pcmMock.EXPECT().SetPodCgroupConfig(pod, v1.ResourceMemory, resourceForMemoryLimit).Return(nil).Once()
+					case calledAndError:
+						pcmMock.EXPECT().SetPodCgroupConfig(pod, v1.ResourceMemory, resourceForMemoryLimit).Return(errors.New(setConfigErrorMsg)).Once()
+					}
+				}
+			}
+
+			updateInfo := containerToUpdateInfo{
+				apiContainerIdx: 0,
+				kubeContainerID: kcs.ID,
+				desiredContainerResources: containerResources{
+					cpuRequest:    tc.desiredResources.Requests.Cpu().MilliValue(),
+					cpuLimit:      tc.desiredResources.Limits.Cpu().MilliValue(),
+					memoryRequest: tc.desiredResources.Requests.Memory().Value(),
+					memoryLimit:   tc.desiredResources.Limits.Memory().Value(),
+				},
+				currentContainerResources: &containerResources{
+					cpuRequest:    tc.currentResources.Requests.Cpu().MilliValue(),
+					cpuLimit:      tc.currentResources.Limits.Cpu().MilliValue(),
+					memoryRequest: tc.currentResources.Requests.Memory().Value(),
+					memoryLimit:   tc.currentResources.Limits.Memory().Value(),
+				},
+			}
+			containersToUpdate := make(map[v1.ResourceName][]containerToUpdateInfo)
+			if !tc.updatePodResources {
+				if cpuReqResized || cpuLimReiszed {
+					containersToUpdate[v1.ResourceCPU] = []containerToUpdateInfo{updateInfo}
+				}
+				if memReqResized || memLimResized {
+					containersToUpdate[v1.ResourceMemory] = []containerToUpdateInfo{updateInfo}
+				}
+			}
+
+			if tc.runTimeError {
+				fakeRuntime.InjectError("UpdateContainerResources", errors.New(runtimeErrorMsg))
+			}
+
+			err := m.doPodResizeAction(pod, kps,
+				podActions{
+					ContainersToUpdate: containersToUpdate,
+					UpdatePodResources: tc.updatePodResources,
+				})
+
+			if tc.expectedError == "" {
+				assert.NoError(t, err)
+			} else {
+				assert.ErrorContains(t, err, tc.expectedError)
+			}
+		})
 	}
 }

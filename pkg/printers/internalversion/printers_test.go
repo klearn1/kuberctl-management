@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/util/certificate/csr"
 	"k8s.io/kubernetes/pkg/apis/admissionregistration"
@@ -46,6 +47,7 @@ import (
 	nodeapi "k8s.io/kubernetes/pkg/apis/node"
 	"k8s.io/kubernetes/pkg/apis/policy"
 	"k8s.io/kubernetes/pkg/apis/rbac"
+	resourceapis "k8s.io/kubernetes/pkg/apis/resource"
 	"k8s.io/kubernetes/pkg/apis/scheduling"
 	"k8s.io/kubernetes/pkg/apis/storage"
 	"k8s.io/kubernetes/pkg/apis/storagemigration"
@@ -6242,6 +6244,322 @@ func TestPrintFlowSchema(t *testing.T) {
 	}
 }
 
+func TestPrintDeviceClass(t *testing.T) {
+
+	tests := []struct {
+		deviceClass resourceapis.DeviceClass
+		expected    []metav1.TableRow
+	}{
+		{
+			deviceClass: resourceapis.DeviceClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "deviceclass",
+					CreationTimestamp: metav1.Time{Time: time.Now()},
+				},
+				Spec: resourceapis.DeviceClassSpec{
+					SuitableNodes: &api.NodeSelector{
+						NodeSelectorTerms: []api.NodeSelectorTerm{{
+							MatchExpressions: []api.NodeSelectorRequirement{{
+								Key:      "foo",
+								Operator: api.NodeSelectorOpExists,
+							}},
+						}},
+					},
+				},
+			},
+			// Columns: Name, Age
+			expected: []metav1.TableRow{{Cells: []interface{}{"deviceclass", "0s"}}},
+		},
+	}
+
+	for i, test := range tests {
+		rows, err := printDeviceClass(&test.deviceClass, printers.GenerateOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range rows {
+			rows[i].Object.Object = nil
+		}
+		if !reflect.DeepEqual(test.expected, rows) {
+			t.Errorf("%d mismatch: %s", i, cmp.Diff(test.expected, rows))
+		}
+	}
+}
+
+func TestPrintResourceClaim(t *testing.T) {
+
+	tests := []struct {
+		name          string
+		resourceClaim resourceapis.ResourceClaim
+		expected      []metav1.TableRow
+	}{
+		{
+			name: "ResourceClaim with Pending State",
+			resourceClaim: resourceapis.ResourceClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "resourceclaim",
+					CreationTimestamp: metav1.Time{Time: time.Now()},
+				},
+				Spec: resourceapis.ResourceClaimSpec{
+					Devices: resourceapis.DeviceClaim{
+						Requests: []resourceapis.DeviceRequest{
+							{
+								Name:            "deviceRequest",
+								DeviceClassName: "deviceClass",
+								AllocationMode:  resourceapis.DeviceAllocationModeExactCount,
+								Count:           1,
+							},
+						},
+					},
+				},
+			},
+			// Columns: Name, State, Age
+			expected: []metav1.TableRow{{Cells: []interface{}{"resourceclaim", "pending", "0s"}}},
+		},
+		{
+			name: "ResourceClaim with Allocated State and Deallocation State",
+			resourceClaim: resourceapis.ResourceClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "resourceclaim",
+					CreationTimestamp: metav1.Time{Time: time.Now()},
+				},
+				Spec: resourceapis.ResourceClaimSpec{
+					Devices: resourceapis.DeviceClaim{
+						Requests: []resourceapis.DeviceRequest{
+							{
+								Name:            "deviceRequest",
+								DeviceClassName: "deviceClass",
+								AllocationMode:  resourceapis.DeviceAllocationModeExactCount,
+								Count:           1,
+							},
+						},
+					},
+				},
+				Status: resourceapis.ResourceClaimStatus{
+					Allocation: &resourceapis.AllocationResult{
+						Controller: "dra.example.com",
+					},
+					DeallocationRequested: true,
+				},
+			},
+			// Columns: Name, State, Age
+			expected: []metav1.TableRow{{Cells: []interface{}{"resourceclaim", "allocated,deallocating", "0s"}}},
+		},
+		{
+			name: "ResourceClaim with Allocated and Reserved State",
+			resourceClaim: resourceapis.ResourceClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "resourceclaim",
+					CreationTimestamp: metav1.Time{Time: time.Now()},
+				},
+				Spec: resourceapis.ResourceClaimSpec{
+					Devices: resourceapis.DeviceClaim{
+						Requests: []resourceapis.DeviceRequest{
+							{
+								Name:            "deviceRequest",
+								DeviceClassName: "deviceClass",
+								AllocationMode:  resourceapis.DeviceAllocationModeExactCount,
+								Count:           1,
+							},
+						},
+					},
+				},
+				Status: resourceapis.ResourceClaimStatus{
+					Allocation: &resourceapis.AllocationResult{
+						Controller: "dra.example.com",
+					},
+					ReservedFor: []resourceapis.ResourceClaimConsumerReference{
+						{
+							Resource: "pods",
+							Name:     "pod-test",
+							UID:      types.UID("pod-test"),
+						},
+					},
+					DeallocationRequested: true,
+				},
+			},
+			// Columns: Name, State, Age
+			expected: []metav1.TableRow{{Cells: []interface{}{"resourceclaim", "allocated,reserved", "0s"}}},
+		},
+		{
+			name: "ResourceClaim with Deleted State",
+			resourceClaim: resourceapis.ResourceClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "resourceclaim",
+					CreationTimestamp: metav1.Time{Time: time.Now()},
+					DeletionTimestamp: &metav1.Time{Time: time.Now()},
+				},
+				Spec: resourceapis.ResourceClaimSpec{
+					Devices: resourceapis.DeviceClaim{
+						Requests: []resourceapis.DeviceRequest{
+							{
+								Name:            "deviceRequest",
+								DeviceClassName: "deviceClass",
+								AllocationMode:  resourceapis.DeviceAllocationModeExactCount,
+								Count:           1,
+							},
+						},
+					},
+				},
+			},
+			// Columns: Name, State, Age
+			expected: []metav1.TableRow{{Cells: []interface{}{"resourceclaim", "deleted", "0s"}}},
+		},
+	}
+
+	for i, test := range tests {
+		rows, err := printResourceClaim(&test.resourceClaim, printers.GenerateOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range rows {
+			rows[i].Object.Object = nil
+		}
+		if !reflect.DeepEqual(test.expected, rows) {
+			t.Errorf("%d mismatch: %s", i, cmp.Diff(test.expected, rows))
+		}
+	}
+}
+
+func TestPrintResourceClaimTemplate(t *testing.T) {
+
+	tests := []struct {
+		resourceClaimTemplate resourceapis.ResourceClaimTemplate
+		expected              []metav1.TableRow
+	}{
+		{
+			resourceClaimTemplate: resourceapis.ResourceClaimTemplate{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "resourceclaimtemplate",
+					CreationTimestamp: metav1.Time{Time: time.Now()},
+				},
+				Spec: resourceapis.ResourceClaimTemplateSpec{
+					Spec: resourceapis.ResourceClaimSpec{
+						Devices: resourceapis.DeviceClaim{
+							Requests: []resourceapis.DeviceRequest{{
+								Name:            "deviceRequest",
+								DeviceClassName: "deviceClassName",
+								AllocationMode:  resourceapis.DeviceAllocationModeExactCount,
+								Count:           1,
+							}},
+						},
+					},
+				},
+			},
+			// Columns: Name, Age
+			expected: []metav1.TableRow{{Cells: []interface{}{"resourceclaimtemplate", "0s"}}},
+		},
+	}
+
+	for i, test := range tests {
+		rows, err := printResourceClaimTemplate(&test.resourceClaimTemplate, printers.GenerateOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range rows {
+			rows[i].Object.Object = nil
+		}
+		if !reflect.DeepEqual(test.expected, rows) {
+			t.Errorf("%d mismatch: %s", i, cmp.Diff(test.expected, rows))
+		}
+	}
+}
+
+func TestPrintPodSchedulingContext(t *testing.T) {
+
+	tests := []struct {
+		name                 string
+		podSchedulingContext resourceapis.PodSchedulingContext
+		expected             []metav1.TableRow
+	}{
+		{
+			name: "PodSchedulingContext with SelectedNode",
+			podSchedulingContext: resourceapis.PodSchedulingContext{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "podschedulercontext",
+					Namespace:         "default",
+					CreationTimestamp: metav1.Time{Time: time.Now()},
+				},
+				Spec: resourceapis.PodSchedulingContextSpec{
+					SelectedNode: "worker",
+				},
+				Status: resourceapis.PodSchedulingContextStatus{},
+			},
+
+			// Columns: Name, SelectedNode, Age
+			expected: []metav1.TableRow{{Cells: []interface{}{"podschedulercontext", "worker", "0s"}}},
+		},
+		{
+			name: "PodSchedulingContext without SelectedNode",
+			podSchedulingContext: resourceapis.PodSchedulingContext{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "podschedulercontext",
+					Namespace:         "default",
+					CreationTimestamp: metav1.Time{Time: time.Now()},
+				},
+				Spec:   resourceapis.PodSchedulingContextSpec{},
+				Status: resourceapis.PodSchedulingContextStatus{},
+			},
+
+			// Columns: Name, SelectedNode, Age
+			expected: []metav1.TableRow{{Cells: []interface{}{"podschedulercontext", "", "0s"}}},
+		},
+	}
+
+	for i, test := range tests {
+		rows, err := printPodSchedulingContext(&test.podSchedulingContext, printers.GenerateOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range rows {
+			rows[i].Object.Object = nil
+		}
+		if !reflect.DeepEqual(test.expected, rows) {
+			t.Errorf("%d mismatch: %s", i, cmp.Diff(test.expected, rows))
+		}
+	}
+}
+
+func TestPrintResourceSlice(t *testing.T) {
+
+	tests := []struct {
+		resourceSlice resourceapis.ResourceSlice
+		expected      []metav1.TableRow
+	}{
+		{
+			resourceSlice: resourceapis.ResourceSlice{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "resourceslice",
+					CreationTimestamp: metav1.Time{Time: time.Now()},
+				},
+				Spec: resourceapis.ResourceSliceSpec{
+					NodeName: "nodeName",
+					Driver:   "driverName",
+					Pool: resourceapis.ResourcePool{
+						Name:               "poolName",
+						ResourceSliceCount: 1,
+					},
+				},
+			},
+			// Columns: Name, Node, Driver, Pool, Age
+			expected: []metav1.TableRow{{Cells: []interface{}{"resourceslice", "nodeName", "driverName", "poolName", "0s"}}},
+		},
+	}
+
+	for i, test := range tests {
+		rows, err := printResourceSlice(&test.resourceSlice, printers.GenerateOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range rows {
+			rows[i].Object.Object = nil
+		}
+		if !reflect.DeepEqual(test.expected, rows) {
+			t.Errorf("%d mismatch: %s", i, cmp.Diff(test.expected, rows))
+		}
+	}
+}
+
 func TestPrintPriorityLevelConfiguration(t *testing.T) {
 	tests := []struct {
 		pl       flowcontrol.PriorityLevelConfiguration
@@ -6769,6 +7087,36 @@ func TestTableRowDeepCopyShouldNotPanic(t *testing.T) {
 			name: "Status",
 			printer: func() ([]metav1.TableRow, error) {
 				return printStatus(&metav1.Status{}, printers.GenerateOptions{})
+			},
+		},
+		{
+			name: "DeviceClass",
+			printer: func() ([]metav1.TableRow, error) {
+				return printDeviceClass(&resourceapis.DeviceClass{}, printers.GenerateOptions{})
+			},
+		},
+		{
+			name: "ResourceClaim",
+			printer: func() ([]metav1.TableRow, error) {
+				return printResourceClaim(&resourceapis.ResourceClaim{}, printers.GenerateOptions{})
+			},
+		},
+		{
+			name: "ResourceClaimTemplate",
+			printer: func() ([]metav1.TableRow, error) {
+				return printResourceClaimTemplate(&resourceapis.ResourceClaimTemplate{}, printers.GenerateOptions{})
+			},
+		},
+		{
+			name: "PodSchedulingContext",
+			printer: func() ([]metav1.TableRow, error) {
+				return printPodSchedulingContext(&resourceapis.PodSchedulingContext{}, printers.GenerateOptions{})
+			},
+		},
+		{
+			name: "ResourceSlice",
+			printer: func() ([]metav1.TableRow, error) {
+				return printResourceSlice(&resourceapis.ResourceSlice{}, printers.GenerateOptions{})
 			},
 		},
 	}

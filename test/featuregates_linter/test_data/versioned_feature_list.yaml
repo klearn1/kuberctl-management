@@ -1,1 +1,6 @@
-[]
+- name: KubeletRegistrationGetOnExistsOnly
+  versionedSpecs:
+  - default: false
+    lockToDefault: false
+    preRelease: Deprecated
+    version: "1.32"

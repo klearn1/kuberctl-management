@@ -1071,7 +1071,9 @@ function start_csi_snapshotter {
         ${KUBECTL} --kubeconfig="${CERT_DIR}/admin.kubeconfig" apply -f "${KUBE_ROOT}/cluster/addons/volumesnapshots/crd/snapshot.storage.k8s.io_volumesnapshotcontents.yaml"
         ${KUBECTL} --kubeconfig="${CERT_DIR}/admin.kubeconfig" apply -f "${KUBE_ROOT}/cluster/addons/volumesnapshots/volume-snapshot-controller/rbac-volume-snapshot-controller.yaml"
         ${KUBECTL} --kubeconfig="${CERT_DIR}/admin.kubeconfig" apply -f "${KUBE_ROOT}/cluster/addons/volumesnapshots/volume-snapshot-controller/volume-snapshot-controller-deployment.yaml"
-
+        ${KUBECTL} --kubeconfig="${CERT_DIR}/admin.kubeconfig" apply -f "${KUBE_ROOT}/cluster/addons/volume-group-snapshots/groupsnapshot.storage.k8s.io_volumegroupsnapshots.yaml"
+        ${KUBECTL} --kubeconfig="${CERT_DIR}/admin.kubeconfig" apply -f "${KUBE_ROOT}/cluster/addons/volume-group-snapshots/groupsnapshot.storage.k8s.io_volumegroupsnapshotclasses.yaml"
+        ${KUBECTL} --kubeconfig="${CERT_DIR}/admin.kubeconfig" apply -f "${KUBE_ROOT}/cluster/addons/volume-group-snapshots/groupsnapshot.storage.k8s.io_volumegroupsnapshotcontents.yaml"
         echo "Kubernetes-CSI snapshotter successfully deployed."
     fi
 }

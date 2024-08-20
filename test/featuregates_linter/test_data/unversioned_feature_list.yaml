@@ -502,12 +502,6 @@
     lockToDefault: false
     preRelease: Alpha
     version: ""
-- name: NewVolumeManagerReconstruction
-  versionedSpecs:
-  - default: true
-    lockToDefault: true
-    preRelease: GA
-    version: ""
 - name: NFTablesProxyMode
   versionedSpecs:
   - default: true
